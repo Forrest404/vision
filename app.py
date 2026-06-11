@@ -15,6 +15,7 @@ Controls:
 """
 
 import os
+import sys
 import time
 
 # Some ops aren't implemented on Apple's MPS backend yet; fall back to CPU
@@ -40,6 +41,23 @@ def pick_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+def open_camera(index: int = 0, width: int = 1280, height: int = 720):
+    """Open the default camera with the best capture backend per OS."""
+    if sys.platform == "darwin":
+        backend = cv2.CAP_AVFOUNDATION
+    elif sys.platform == "win32":
+        backend = cv2.CAP_DSHOW  # avoids multi-second MSMF startup stalls
+    else:
+        backend = cv2.CAP_ANY  # V4L2 on Linux
+    cap = cv2.VideoCapture(index, backend)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(index)  # fall back to OpenCV's default backend
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    return cap
 
 
 def make_palette(n: int = 256) -> np.ndarray:
@@ -142,13 +160,12 @@ def main():
     show_boxes = False
     fps = 0.0
 
-    cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap = open_camera()
     if not cap.isOpened():
         raise SystemExit(
-            "Could not open the camera. Grant camera access to your terminal in "
-            "System Settings > Privacy & Security > Camera, then rerun."
+            "Could not open the camera. Close other apps using it, and on macOS "
+            "grant camera access to your terminal in System Settings > "
+            "Privacy & Security > Camera, then rerun."
         )
 
     window = "Precise Segmentation  (q quit, m mode, 1/2/3 size, [/] conf, b boxes)"

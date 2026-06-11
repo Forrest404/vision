@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,203 +8,60 @@
 </head>
 <body>
 
-<header>
-  <div class="brand">
-    <span class="logo"></span>
-    <h1>Precise Segmentation</h1>
-  </div>
-  <div class="chips">
-    <span class="chip" id="chipConn"><span class="dot" id="connDot"></span><span id="connText">connecting</span></span>
-    <span class="chip" id="chipDevice">device —</span>
-    <span class="chip" id="chipFps">0 FPS</span>
-    <span class="chip" id="chipInfer">0 ms</span>
-    <span class="chip" id="chipObjects">0 objects</span>
-  </div>
-</header>
-
 <main>
-  <section id="stage">
-    <div id="toolbar">
-      <button id="btnPause" title="Pause / resume the stream">Pause</button>
-      <button id="btnSnapshot" title="Download the current frame as PNG">Snapshot</button>
-      <button id="btnRecord" title="Record the annotated stream to a video file">Record</button>
-      <button id="btnFullscreen" title="Fullscreen">Fullscreen</button>
-    </div>
-    <div id="canvasWrap">
-      <canvas id="view"></canvas>
-      <div id="overlayMsg" class="hidden"></div>
-    </div>
+  <section id="feed">
+    <img id="video" src="/video_feed" alt="Live segmentation stream">
   </section>
 
   <aside id="panel">
 
-    <details open>
-      <summary>Model</summary>
-      <div class="control">
-        <span class="label">Mode</span>
-        <div class="segmented" id="segMode">
-          <button data-value="yolo" class="active">Detect + Label</button>
-          <button data-value="sam">Segment Everything</button>
-        </div>
-        <p class="hint" id="modeHint">YOLO11-seg: 80 labeled object classes, precise masks.</p>
+    <div id="statusRow">
+      <span id="liveBadge"><span id="liveDot"></span>LIVE</span>
+      <span id="modelName">yolo11s-seg</span>
+      <span id="fpsLabel">0 FPS</span>
+    </div>
+
+    <section class="group">
+      <h2>Segmentation mode</h2>
+      <button id="modeBtn" class="wide">YOLO Seg</button>
+    </section>
+
+    <section class="group" id="sizeGroup">
+      <h2>Model size</h2>
+      <div id="sizeRow">
+        <button data-size="n">Nano</button>
+        <button data-size="s" class="active">Small</button>
+        <button data-size="m">Medium</button>
       </div>
-      <div class="control" id="ctlSize">
-        <span class="label">Model size <small>(bigger = more precise, slower)</small></span>
-        <div class="segmented" id="segSize">
-          <button data-value="n">N</button>
-          <button data-value="s">S</button>
-          <button data-value="m" class="active">M</button>
-          <button data-value="l">L</button>
-          <button data-value="x">X</button>
-        </div>
-        <p class="hint">L and X download on first use.</p>
-      </div>
-      <label class="control row">
-        <span class="label">Inference size</span>
-        <select id="imgsz">
-          <option value="320">320 — fastest</option>
-          <option value="480">480</option>
-          <option value="640" selected>640 — balanced</option>
-          <option value="960">960 — finest</option>
-        </select>
-      </label>
-    </details>
+    </section>
 
-    <details open>
-      <summary>Detection</summary>
-      <label class="control slider">
-        <span class="label">Confidence <output id="outConf">0.35</output></span>
-        <input type="range" id="conf" min="0.05" max="0.95" step="0.05" value="0.35">
-      </label>
-      <label class="control slider">
-        <span class="label">Overlap (IoU) <output id="outIou">0.70</output></span>
-        <input type="range" id="iou" min="0.1" max="0.95" step="0.05" value="0.7">
-      </label>
-      <label class="control slider">
-        <span class="label">Max objects <output id="outMaxDet">100</output></span>
-        <input type="range" id="maxDet" min="1" max="300" step="1" value="100">
-      </label>
-      <div class="control" id="ctlClasses">
-        <span class="label">Class filter <small>(none checked = all)</small></span>
-        <input type="search" id="classSearch" placeholder="Search classes…">
-        <div class="mini-actions">
-          <button id="classAll">Check all</button>
-          <button id="classNone">Clear</button>
-        </div>
-        <div id="classList"></div>
-      </div>
-    </details>
+    <section class="group">
+      <h2>Confidence <output id="confOut">0.35</output></h2>
+      <input type="range" id="confSlider" min="0.1" max="0.95" step="0.05" value="0.35">
+    </section>
 
-    <details open>
-      <summary>Masks</summary>
-      <label class="control toggle">
-        <span class="label">Fill</span>
-        <input type="checkbox" id="fill" checked>
-      </label>
-      <label class="control slider">
-        <span class="label">Fill opacity <output id="outFillOpacity">0.45</output></span>
-        <input type="range" id="fillOpacity" min="0" max="1" step="0.05" value="0.45">
-      </label>
-      <label class="control toggle">
-        <span class="label">Outline</span>
-        <input type="checkbox" id="outline" checked>
-      </label>
-      <label class="control slider">
-        <span class="label">Outline width <output id="outOutlineWidth">2.5</output></span>
-        <input type="range" id="outlineWidth" min="0.5" max="8" step="0.5" value="2.5">
-      </label>
-      <label class="control row">
-        <span class="label">Color by</span>
-        <select id="colorMode">
-          <option value="class" selected>Class</option>
-          <option value="instance">Instance</option>
-          <option value="single">Single color</option>
-        </select>
-      </label>
-      <label class="control row" id="ctlSingleColor">
-        <span class="label">Color</span>
-        <input type="color" id="singleColor" value="#22d3ee">
-      </label>
-      <label class="control row" id="ctlPalette">
-        <span class="label">Palette</span>
-        <select id="palette">
-          <option value="vivid" selected>Vivid</option>
-          <option value="pastel">Pastel</option>
-          <option value="neon">Neon</option>
-        </select>
-      </label>
-    </details>
+    <section class="group">
+      <button id="boxesBtn" class="wide">Bounding Boxes: Off</button>
+    </section>
 
-    <details open>
-      <summary>Labels &amp; boxes</summary>
-      <label class="control toggle">
-        <span class="label">Labels</span>
-        <input type="checkbox" id="labels" checked>
-      </label>
-      <label class="control toggle">
-        <span class="label">Confidence in label</span>
-        <input type="checkbox" id="showConf" checked>
-      </label>
-      <label class="control slider">
-        <span class="label">Label size <output id="outLabelSize">14</output></span>
-        <input type="range" id="labelSize" min="9" max="28" step="1" value="14">
-      </label>
-      <label class="control toggle">
-        <span class="label">Bounding boxes</span>
-        <input type="checkbox" id="boxes">
-      </label>
-      <label class="control slider">
-        <span class="label">Box width <output id="outBoxWidth">1.5</output></span>
-        <input type="range" id="boxWidth" min="0.5" max="6" step="0.5" value="1.5">
-      </label>
-    </details>
+    <section class="group" id="classGroup">
+      <h2>Class filter <span class="hint">(none active = all)</span></h2>
+      <div id="classGrid"></div>
+    </section>
 
-    <details>
-      <summary>Video</summary>
-      <label class="control row">
-        <span class="label">Camera</span>
-        <select id="cameraSelect"></select>
-      </label>
-      <label class="control row">
-        <span class="label">Capture width</span>
-        <select id="capWidth">
-          <option value="640">640</option>
-          <option value="960">960</option>
-          <option value="1280" selected>1280</option>
-          <option value="1920">1920</option>
-        </select>
-      </label>
-      <label class="control toggle">
-        <span class="label">Mirror</span>
-        <input type="checkbox" id="mirror" checked>
-      </label>
-      <label class="control slider">
-        <span class="label">Stream quality <output id="outQuality">0.80</output></span>
-        <input type="range" id="quality" min="0.3" max="0.95" step="0.05" value="0.8">
-      </label>
-    </details>
+    <section class="group" id="objectsGroup">
+      <h2>Objects detected</h2>
+      <div id="objectsCount">0</div>
+    </section>
 
-    <details>
-      <summary>Appearance</summary>
-      <label class="control row">
-        <span class="label">Theme</span>
-        <select id="theme">
-          <option value="dark" selected>Dark</option>
-          <option value="light">Light</option>
-        </select>
-      </label>
-      <label class="control row">
-        <span class="label">Accent</span>
-        <input type="color" id="accent" value="#22d3ee">
-      </label>
-      <div class="control">
-        <button id="btnReset" class="danger">Reset all settings</button>
-      </div>
-    </details>
+    <button id="snapBtn" class="wide primary">Snapshot</button>
+
+    <p id="shortcuts">M mode &nbsp;·&nbsp; 1/2/3 size &nbsp;·&nbsp; [ ] confidence &nbsp;·&nbsp; B boxes</p>
 
   </aside>
 </main>
 
+<canvas id="snapCanvas" hidden></canvas>
 <script src="/static/app.js"></script>
 </body>
 </html>
