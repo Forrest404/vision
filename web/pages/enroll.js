@@ -1,6 +1,6 @@
 // Enroll: batch-upload photos, click each detected face, name it.
 // Names save to the database IMMEDIATELY on OK — nothing is staged.
-import { $, el, api, toast, photoWithFaces, handoff } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, confirmModal, handoff } from '/static/app.js?v=2';
 
 let personCache = [];
 
@@ -85,11 +85,27 @@ function renderPhoto(r) {
   }));
 
   const card = el('div', { class: 'card' });
-  const head = el('div', { style: 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;gap:10px' },
+  const head = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap' },
     el('div', {},
       el('strong', {}, r.original_name || `photo #${r.photo_id}`),
       r.duplicate ? el('span', { class: 'muted' }, '  (already in library)') : null),
-    el('span', { class: 'muted' }, `${faces.length} face${faces.length === 1 ? '' : 's'} detected — click a face to name it`));
+    el('div', { style: 'display:flex;align-items:center;gap:10px' },
+      el('span', { class: 'muted' }, `${faces.length} face${faces.length === 1 ? '' : 's'} detected — click a face to name it`),
+      el('button', {
+        class: 'small danger',
+        title: 'Delete this photo and its faces from the library',
+        onclick: () => confirmModal(
+          `Remove "${r.original_name || `photo #${r.photo_id}`}" and its faces from the library?`,
+          async () => {
+            try {
+              await api.del(`/api/photos/${r.photo_id}`);
+              card.remove();
+              toast('Photo removed', 'ok');
+            } catch (err) {
+              toast(`Could not remove: ${err.message}`, 'err');
+            }
+          }, 'Remove'),
+      }, 'Remove')));
 
   const pb = photoWithFaces(r.url, { w: r.width, h: r.height }, faces, {
     onFaceClick: (f, node) => namePopover(f, node),
