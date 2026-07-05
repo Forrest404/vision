@@ -1,15 +1,24 @@
-# Precise Live Segmentation
+# FaceVision
 
-Real-time object detection from your camera where every object gets a
-**pixel-accurate mask tracing its outline** — not just a box. Runs fully on
-your own machine (no cloud), with a clean web control panel.
+Offline, on-device **face recognition** with a full web UI — plus the
+original real-time object segmentation as a separate mode. Nothing ever
+leaves your machine: detection, embeddings, and the face database all live
+in this folder.
 
-- **YOLO Seg mode** — recognizes 80 everyday objects (people, pets, phones,
-  cups, cars…) with name + confidence, tracked across frames for smooth,
-  stable masks
-- **FastSAM mode** — masks *everything* in view, even objects it can't name
-- Works on **macOS** (Apple GPU), **Windows** and **Linux** (NVIDIA GPU if
-  available, otherwise CPU)
+- **Live** — camera feed with a name next to every face it knows
+  ("Unknown" otherwise), powered by OpenCV YuNet + SFace
+- **Enroll** — drag-drop photos (batch supported), click each detected
+  face, type a name; the face joins your on-device database
+- **Identify** — upload a photo, see who's in it (nothing is stored)
+- **Search** — upload a face and get every stored photo containing that
+  person, with the matching face highlighted and a link to the original
+- **People** — browse, search, rename, merge and delete people and photos
+- **Objects** — the original YOLO11-seg / FastSAM segmentation tool
+- **Settings** — recognition threshold, detector confidence, overlay
+  colors/landmarks/label size, camera resolution — all persisted locally
+
+Works on **macOS** (Apple GPU), **Windows** and **Linux** (NVIDIA GPU if
+available, otherwise CPU).
 
 ## Install (one time, ~5 minutes)
 
@@ -28,8 +37,13 @@ py -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-That's it. Model weights (~20–45 MB each) download automatically the first
-time each model is used.
+Model weights download automatically on first use (YOLO models ~20–45 MB
+each; the two face models are ~37 MB total). **After that everything runs
+fully offline.** If the machine is offline on first run, download the two
+face models manually and drop them into `models/`:
+
+- <https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx>
+- <https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx>
 
 ## Run
 
@@ -43,41 +57,65 @@ time each model is used.
 .venv\Scripts\python server.py
 ```
 
-Your browser opens http://localhost:8000 with the live feed. First launch
-may ask for camera permission — allow it (on macOS the permission goes to
-your terminal app) and the feed appears.
+Your browser opens http://localhost:8000. First launch may ask for camera
+permission — allow it (on macOS the permission goes to your terminal app).
 
-## Using the control panel
+## The face database
+
+Everything is stored in `data/`:
+
+| Path | Contents |
+|---|---|
+| `data/faces.db` | SQLite: people, photos, face embeddings |
+| `data/media/photos/` | Full uploaded photos |
+| `data/media/thumbs/` | Gallery thumbnails |
+| `data/media/crops/` | One crop per detected face |
+
+Delete `data/` to wipe the library. Back it up by copying the folder.
+
+**Recognition quality tips**
+
+- Enroll 3–5 photos per person (different angles/lighting) for reliable
+  matches.
+- If strangers get named, raise the match threshold in Settings; if known
+  people show as Unknown, lower it slightly. Default is 0.36.
+- Face search also digs through *unlabeled* faces, so you can find "who
+  else appears with this person" before naming anyone.
+
+## Objects mode
+
+The original segmentation tool lives in the **Objects** page:
 
 | Control | What it does | Shortcut |
 |---|---|---|
-| Segmentation mode | YOLO Seg (named objects) ↔ FastSAM (mask everything) | `M` |
+| Mode | YOLO Seg (named objects) ↔ FastSAM (mask everything) | `M` |
 | Model size | Nano / Small / Medium — speed vs precision | `1` `2` `3` |
 | Confidence | How sure the model must be before masking something | `[` `]` |
-| Bounding Boxes | Draw classic boxes in addition to masks | `B` |
-| Class filter | Tap chips (person, car, dog…) to only detect those; chip colour = mask colour | |
+| Bounding boxes | Classic boxes in addition to masks | `B` |
+| Class filter | Tap chips to only detect those classes | |
 | Snapshot | Saves the current annotated frame as a PNG | |
-
-The LIVE badge shows the active model and real FPS; "Objects detected"
-updates every second.
 
 ## Tips
 
-- **Small** is the best balance (40+ FPS on an Apple M-series GPU).
-  **Medium** gives the finest masks, **Nano** is for slower machines — on a
-  CPU-only machine start with Nano.
+- **Small** is the best model-size balance (40+ FPS on an Apple M-series
+  GPU); **Nano** for CPU-only machines.
 - On Windows/Linux with an NVIDIA card, install the CUDA build of PyTorch
-  first for GPU speed: `pip install torch --index-url https://download.pytorch.org/whl/cu124`
+  first: `pip install torch --index-url https://download.pytorch.org/whl/cu124`
 - No camera, or want to test with a file? `python server.py --source video.mp4`
-  (an image works too).
 - Port already in use? `python server.py --port 8080`
+- Set `FACEVISION_NO_DOWNLOAD=1` to forbid all network access (the server
+  then requires the model files to already exist).
 
 ## Troubleshooting
 
 - **"Camera unavailable" in the feed** — close other apps using the camera
   (Zoom, FaceTime…). macOS: System Settings → Privacy & Security → Camera →
   allow your terminal. The server keeps retrying every few seconds.
-- **Slow / laggy** — press `1` for the Nano model, or raise confidence with `]`.
+- **"Face models loading" banner stays** — the one-time download needs
+  internet; or place the ONNX files in `models/` manually (links above) and
+  restart.
+- **Slow / laggy** — in Objects press `1` for Nano; in Live lower the
+  camera resolution in Settings.
 - **Browser didn't open** — go to http://localhost:8000 manually.
 
 ## Desktop window (alternative, no browser)
@@ -85,5 +123,5 @@ updates every second.
 ```bash
 .venv/bin/python app.py        # Windows: .venv\Scripts\python app.py
 ```
-Same models in a plain OpenCV window. Keys: `q` quit, `m` mode, `1/2/3`
-size, `[` `]` confidence, `b` boxes.
+The original OpenCV-window segmentation tool. Keys: `q` quit, `m` mode,
+`1/2/3` size, `[` `]` confidence, `b` boxes.

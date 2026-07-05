@@ -1,165 +1,209 @@
+// FaceVision SPA: hash router + shared helpers. Pages live in /static/pages/.
 'use strict';
 
-const $ = (sel) => document.querySelector(sel);
-const send = (url) => fetch(url).catch(() => {});
+import * as live from '/static/pages/live.js';
+import * as enroll from '/static/pages/enroll.js';
+import * as identify from '/static/pages/identify.js';
+import * as search from '/static/pages/search.js';
+import * as people from '/static/pages/people.js';
+import * as objects from '/static/pages/objects.js';
+import * as settings from '/static/pages/settings.js';
 
-// Mirrors the server's state; the 1s /stats poll keeps it honest.
-const S = { mode: 'yolo', size: 'm', conf: 0.35, boxes: false, classes: new Set() };
+/* -------------------------------- helpers ------------------------------- */
 
-const chipColor = (i) => `hsl(${(i * 137.508) % 360} 85% 55%)`; // same wheel as the masks
+export const $ = (sel, root = document) => root.querySelector(sel);
 
-/* ------------------------------- controls ------------------------------- */
+// cross-page handoff (e.g. Identify -> "Add to library" -> Enroll)
+export const handoff = {};
 
-function syncControls() {
-  $('#modeBtn').textContent = S.mode === 'yolo' ? 'YOLO Seg' : 'FastSAM';
-  $('#modeBtn').classList.toggle('active', S.mode === 'sam');
-
-  document.querySelectorAll('#sizeRow button').forEach((b) =>
-    b.classList.toggle('active', b.dataset.size === S.size));
-
-  $('#confOut').textContent = S.conf.toFixed(2);
-  if (!confDragging) $('#confSlider').value = S.conf;
-
-  $('#boxesBtn').textContent = `Bounding Boxes: ${S.boxes ? 'On' : 'Off'}`;
-  $('#boxesBtn').classList.toggle('active', S.boxes);
-
-  document.querySelectorAll('.chip').forEach((c) =>
-    c.classList.toggle('active', S.classes.has(+c.dataset.id)));
-
-  // size + class filter only apply to YOLO mode
-  const sam = S.mode === 'sam';
-  $('#sizeGroup').classList.toggle('disabled', sam);
-  $('#classGroup').classList.toggle('disabled', sam);
+export function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'html') node.innerHTML = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined) continue;
+    node.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  return node;
 }
 
-function setMode(mode) {
-  S.mode = mode;
-  send(`/set_mode?mode=${mode}`);
-  syncControls();
+export function toast(msg, type = '') {
+  const t = el('div', { class: `toast ${type}` }, msg);
+  $('#toasts').append(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 3200);
+  setTimeout(() => t.remove(), 3600);
 }
 
-function setSize(size) {
-  S.size = size;
-  send(`/set_model_size?size=${size}`);
-  syncControls();
+async function handle(resp) {
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try { detail = (await resp.json()).detail || detail; } catch { /* not json */ }
+    throw new Error(detail);
+  }
+  return resp.json();
 }
 
-let confSendTimer = null;
-function setConf(value) {
-  S.conf = Math.min(0.95, Math.max(0.1, Math.round(value * 20) / 20));
-  clearTimeout(confSendTimer); // throttle while sliding/holding a key
-  confSendTimer = setTimeout(() => {
-    confSendTimer = null;
-    send(`/set_confidence?value=${S.conf}`);
-  }, 120);
-  syncControls();
+export const api = {
+  get: (url) => fetch(url).then(handle),
+  post: (url, body) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(handle),
+  patch: (url, body) => fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(handle),
+  del: (url) => fetch(url, { method: 'DELETE' }).then(handle),
+  // multipart upload; `files` may be a File or an array of Files
+  upload: (url, files, field = 'files', extra = {}) => {
+    const fd = new FormData();
+    for (const f of [].concat(files)) fd.append(field, f);
+    for (const [k, v] of Object.entries(extra)) fd.append(k, v);
+    return fetch(url, { method: 'POST', body: fd }).then(handle);
+  },
+};
+
+/* ----------------------- face overlays on an image ---------------------- */
+
+// Absolutely-positioned boxes in % of the image's natural size, so they
+// track responsive resizing for free. Returns the .photobox wrapper.
+export function photoWithFaces(src, natural, faces, opts = {}) {
+  const box = el('div', { class: 'photobox' });
+  const img = el('img', { src, alt: '' });
+  box.append(img);
+  const place = () => {
+    const w = natural?.w || img.naturalWidth;
+    const h = natural?.h || img.naturalHeight;
+    if (!w || !h) return;
+    for (const f of faces) {
+      const b = f.bbox;
+      const fb = el('button', {
+        class: `facebox ${f.cls || ''}`,
+        style: `left:${(b.x / w) * 100}%;top:${(b.y / h) * 100}%;` +
+               `width:${(b.w / w) * 100}%;height:${(b.h / h) * 100}%;`,
+        title: f.title || '',
+      });
+      if (f.tag) fb.append(el('span', { class: 'tag' }, f.tag));
+      if (opts.onFaceClick) fb.addEventListener('click', (e) => { e.stopPropagation(); opts.onFaceClick(f, fb); });
+      box.append(fb);
+      f._node = fb;
+    }
+  };
+  if (natural?.w) place();
+  else if (img.complete && img.naturalWidth) place();
+  else img.addEventListener('load', place, { once: true });
+  if (opts.onClick) { box.style.cursor = 'zoom-in'; img.addEventListener('click', () => opts.onClick()); }
+  return box;
 }
 
-function toggleBoxes() {
-  S.boxes = !S.boxes;
-  send('/toggle_boxes');
-  syncControls();
+/* --------------------------------- modal -------------------------------- */
+
+export function modal(build) {
+  const root = $('#modalRoot');
+  const backdrop = el('div', { class: 'modal-backdrop' });
+  const box = el('div', { class: 'modal' });
+  backdrop.append(box);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+  window.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { close(); window.removeEventListener('keydown', esc); }
+  });
+  build(box, close);
+  root.append(backdrop);
+  return close;
 }
 
-function toggleClass(id) {
-  S.classes.has(id) ? S.classes.delete(id) : S.classes.add(id);
-  send(`/set_classes?ids=${[...S.classes].join(',')}`);
-  syncControls();
+export function confirmModal(text, onYes, yesLabel = 'Delete') {
+  modal((box, close) => {
+    box.append(
+      el('h3', {}, 'Are you sure?'),
+      el('p', { class: 'muted' }, text),
+      el('div', { class: 'btnrow', style: 'justify-content:flex-end;margin-top:16px' },
+        el('button', { onclick: close }, 'Cancel'),
+        el('button', { class: 'danger', onclick: () => { close(); onYes(); } }, yesLabel)),
+    );
+  });
 }
 
-$('#modeBtn').addEventListener('click', () => setMode(S.mode === 'yolo' ? 'sam' : 'yolo'));
+export function lightbox(src, faces = [], natural = null) {
+  const lb = el('div', { class: 'lightbox' });
+  const pb = photoWithFaces(src, natural, faces);
+  pb.style.cursor = 'default';
+  lb.append(pb);
+  lb.append(el('div', { class: 'actions' },
+    el('a', { class: 'btn', href: src, target: '_blank' }, 'Open original'),
+    el('button', { onclick: () => lb.remove() }, 'Close')));
+  lb.addEventListener('click', (e) => { if (e.target === lb) lb.remove(); });
+  document.body.append(lb);
+}
 
-document.querySelectorAll('#sizeRow button').forEach((b) =>
-  b.addEventListener('click', () => setSize(b.dataset.size)));
+/* --------------------------------- router ------------------------------- */
 
-let confDragging = false;
-const slider = $('#confSlider');
-slider.addEventListener('pointerdown', () => { confDragging = true; });
-window.addEventListener('pointerup', () => { confDragging = false; });
-slider.addEventListener('input', () => setConf(+slider.value));
+const routes = [
+  { match: /^#\/live$/, page: live, id: 'live' },
+  { match: /^#\/enroll$/, page: enroll, id: 'enroll' },
+  { match: /^#\/identify$/, page: identify, id: 'identify' },
+  { match: /^#\/search$/, page: search, id: 'search' },
+  { match: /^#\/people$/, page: people, id: 'people' },
+  { match: /^#\/people\/(\d+)$/, page: people, id: 'people' },
+  { match: /^#\/objects$/, page: objects, id: 'objects' },
+  { match: /^#\/settings$/, page: settings, id: 'settings' },
+];
 
-$('#boxesBtn').addEventListener('click', toggleBoxes);
+let current = null;
 
-/* ------------------------------ class chips ----------------------------- */
+async function route() {
+  const hash = location.hash || '#/live';
+  const r = routes.find((r) => r.match.test(hash)) || routes[0];
+  const params = hash.match(r.match)?.slice(1) || [];
 
-async function buildChips() {
+  if (current?.unmount) { try { current.unmount(); } catch { /* page cleanup */ } }
+  current = r.page;
+
+  document.querySelectorAll('.navlink').forEach((a) =>
+    a.classList.toggle('active', a.dataset.page === r.id));
+
+  const main = $('#page');
+  main.innerHTML = '';
+  main.scrollTop = 0;
   try {
-    const info = await fetch('/api/info').then((r) => r.json());
-    const grid = $('#classGrid');
-    info.classes.forEach((name, id) => {
-      const chip = document.createElement('button');
-      chip.className = 'chip';
-      chip.textContent = name;
-      chip.dataset.id = id;
-      chip.style.setProperty('--chip', chipColor(id));
-      chip.addEventListener('click', () => toggleClass(id));
-      grid.appendChild(chip);
-    });
-    applyStats(info.state);
-  } catch {
-    setTimeout(buildChips, 1500); // server still warming up
+    await r.page.mount(main, params);
+  } catch (err) {
+    main.append(el('div', { class: 'empty' },
+      el('div', { class: 'icon' }, '⚠'), `Failed to load page: ${err.message}`));
   }
 }
 
-/* ------------------------------ stats poll ------------------------------ */
+window.addEventListener('hashchange', route);
 
-function applyStats(st) {
-  if (!st) return;
-  $('#fpsLabel').textContent = `${st.fps.toFixed(1)} FPS`;
-  $('#modelName').textContent = st.model.replace('.pt', '');
-  $('#objectsCount').textContent = st.objects;
-  $('#liveDot').style.background = st.error ? '#f59e0b' : '';
+/* ----------------------------- status polling --------------------------- */
 
-  S.mode = st.mode;
-  S.size = st.size;
-  S.boxes = st.boxes;
-  if (!confDragging && !confSendTimer) S.conf = st.conf;
-  S.classes = new Set(st.classes);
-  syncControls();
+export const status = { state: null, faceReady: false, listeners: new Set() };
+
+async function pollStatus() {
+  try {
+    const st = await api.get('/stats');
+    status.state = st;
+    const dot = $('#statusDot'), txt = $('#statusText');
+    if (st.error) { dot.className = 'warn'; txt.textContent = st.error; }
+    else { dot.className = 'ok'; txt.textContent = `${st.device} · ${st.fps.toFixed(0)} fps`; }
+    status.listeners.forEach((fn) => { try { fn(st); } catch { /* listener */ } });
+  } catch {
+    $('#statusDot').className = '';
+    $('#statusText').textContent = 'offline';
+  }
 }
 
-setInterval(async () => {
-  try {
-    applyStats(await fetch('/stats').then((r) => r.json()));
-  } catch { /* server restarting; keep polling */ }
-}, 1000);
+setInterval(pollStatus, 1000);
+pollStatus();
 
-/* ------------------------------- snapshot ------------------------------- */
+/* ---------------------------------- init -------------------------------- */
 
-$('#snapBtn').addEventListener('click', () => {
-  const img = $('#video');
-  if (!img.naturalWidth) return;
-  const canvas = $('#snapCanvas');
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
-  canvas.getContext('2d').drawImage(img, 0, 0);
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `segmentation-${Date.now()}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, 'image/png');
-});
-
-/* --------------------------- keyboard shortcuts ------------------------- */
-
-const SIZE_KEYS = { 1: 'n', 2: 's', 3: 'm' };
-
-window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const tag = document.activeElement && document.activeElement.tagName;
-  if (tag === 'INPUT' && document.activeElement.type === 'text') return;
-
-  if (e.key === 'm' || e.key === 'M') setMode(S.mode === 'yolo' ? 'sam' : 'yolo');
-  else if (SIZE_KEYS[e.key]) setSize(SIZE_KEYS[e.key]);
-  else if (e.key === '[') setConf(S.conf - 0.05);
-  else if (e.key === ']') setConf(S.conf + 0.05);
-  else if (e.key === 'b' || e.key === 'B') toggleBoxes();
-});
-
-/* --------------------------------- init --------------------------------- */
-
-buildChips();
-syncControls();
+if (!location.hash) location.hash = '#/live';
+route();
