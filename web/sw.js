@@ -2,11 +2,12 @@
 // instantly; everything live (API, media, streams) always goes to the network.
 'use strict';
 
-const CACHE = 'facevision-v1';
+const CACHE = 'facevision-v2'; // bump on every release so shells refresh
 const SHELL = [
   '/',
   '/static/style.css?v=2',
   '/static/app.js?v=2',
+  '/static/pages/gallery.js',
   '/static/pages/live.js',
   '/static/pages/enroll.js',
   '/static/pages/identify.js',

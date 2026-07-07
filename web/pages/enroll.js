@@ -46,8 +46,12 @@ export async function mount(root) {
   }
 }
 
+let uploading = false;
+
 async function upload(files) {
-  if (!files.length) return;
+  if (!files.length || uploading) return; // one batch at a time
+  uploading = true;
+  document.querySelector('.dropzone')?.classList.add('disabled');
   const bar = $('#upProgress');
   bar.style.display = '';
   bar.firstChild.style.width = '2%';
@@ -65,7 +69,9 @@ async function upload(files) {
     done += chunk.length;
     bar.firstChild.style.width = `${(done / files.length) * 100}%`;
   }
-  setTimeout(() => { bar.style.display = 'none'; }, 600);
+  setTimeout(() => { if (bar.isConnected) bar.style.display = 'none'; }, 600);
+  uploading = false;
+  document.querySelector('.dropzone')?.classList.remove('disabled');
   personCache = await api.get('/api/persons').catch(() => personCache);
 }
 
@@ -189,12 +195,13 @@ function namePopover(face, node) {
     if (e.key === 'Escape') pop.remove();
   });
 
-  // position under the face box, inside the photobox
+  // position under the face box, inside the photobox (clamp by real size)
   const parent = node.parentElement;
   parent.append(pop);
   const nb = node.getBoundingClientRect();
   const pbx = parent.getBoundingClientRect();
-  pop.style.left = `${Math.max(0, Math.min(nb.left - pbx.left, pbx.width - 290))}px`;
+  const pw = pop.offsetWidth || 300;
+  pop.style.left = `${Math.max(0, Math.min(nb.left - pbx.left, pbx.width - pw))}px`;
   pop.style.top = `${nb.bottom - pbx.top + 6}px`;
   input.focus();
   input.select();

@@ -1,7 +1,7 @@
 // Phone camera app: fullscreen viewfinder streaming frames to the Mac for
 // live recognition (+ auto-capture), and a shutter for Identify / Add
 // to library. Installed to the iPhone home screen as a PWA.
-import { $, el, api, toast, photoWithFaces } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, trackUrl } from '/static/app.js?v=2';
 
 const SEND_WIDTH = 640;    // streamed analysis frames (kept small for speed)
 const JPEG_QUALITY = 0.7;
@@ -183,7 +183,7 @@ function takePhoto() {
 
 function reviewPhoto(file) {
   const review = $('#phoneReview');
-  const url = URL.createObjectURL(file);
+  const url = trackUrl(URL.createObjectURL(file));
   review.innerHTML = '';
   review.style.display = '';
   const imgBox = el('div', { class: 'phone-review-img' }, el('img', { src: url, alt: '' }));
@@ -205,13 +205,14 @@ async function identify(file, imgBox, actions) {
   setBusy(actions, 'Identifying…');
   try {
     const res = await api.upload('/api/identify', file, 'file');
+    if (!imgBox.isConnected) return; // user left the review while we worked
     const faces = res.faces.map((f) => ({
       ...f,
       cls: f.match ? 'named' : 'unknown',
       tag: f.match ? `${f.match.name} ${f.match.score.toFixed(2)}` : 'Unknown',
     }));
     imgBox.innerHTML = '';
-    imgBox.append(photoWithFaces(URL.createObjectURL(file), { w: res.width, h: res.height }, faces));
+    imgBox.append(photoWithFaces(trackUrl(URL.createObjectURL(file)), { w: res.width, h: res.height }, faces));
     const known = faces.filter((f) => f.match);
     toast(known.length ? `Recognized: ${known.map((f) => f.match.name).join(', ')}` : 'No one recognized', known.length ? 'ok' : '');
   } catch (err) {
@@ -224,6 +225,7 @@ async function addToLibrary(file, imgBox, actions) {
   setBusy(actions, 'Saving…');
   try {
     const res = await api.upload('/api/photos', file);
+    if (!imgBox.isConnected) return; // user left the review while we worked
     const r = res.results[0];
     if (r.error) throw new Error(r.error);
     const faces = r.faces.map((f) => ({
@@ -262,7 +264,10 @@ function nameFace(face, node) {
     } catch (err) { toast(err.message, 'err'); }
     sheet.remove();
   };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') save();
+    if (e.key === 'Escape') sheet.remove();
+  });
   sheet.append(input,
     el('button', { class: 'primary', onclick: save }, 'Save'),
     el('button', { class: 'ghost', onclick: () => sheet.remove() }, 'Cancel'));

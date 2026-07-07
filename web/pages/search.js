@@ -1,6 +1,6 @@
 // Search: upload a face photo -> every stored photo containing that person,
 // with the matching face highlighted and a link to the full photo.
-import { $, el, api, toast, photoWithFaces, lightbox, handoff } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, lightbox, handoff, trackUrl } from '/static/app.js?v=2';
 
 let queryFile = null;
 
@@ -42,7 +42,7 @@ async function search(file, faceIndex = null) {
   queryFile = file;
   const out = $('#searchOut');
   out.innerHTML = '';
-  out.append(el('p', { class: 'muted' }, 'Searching…'));
+  out.append(el('p', { class: 'muted' }, el('span', { class: 'spinner' }), ' Searching…'));
 
   try {
     const extra = faceIndex === null ? {} : { face_index: faceIndex };
@@ -57,7 +57,7 @@ async function search(file, faceIndex = null) {
     if (res.needs_selection) {
       out.append(el('div', { class: 'card', style: 'max-width:760px' },
         el('h2', {}, 'Multiple faces — pick the one to search for'),
-        photoWithFaces(URL.createObjectURL(file), { w: res.width, h: res.height },
+        photoWithFaces(trackUrl(URL.createObjectURL(file)), { w: res.width, h: res.height },
           res.query_faces.map((f, i) => ({ ...f, tag: `${i + 1}`, _idx: i })),
           { onFaceClick: (f) => search(file, f._idx) })));
       return;

@@ -6,6 +6,7 @@ import * as enroll from '/static/pages/enroll.js';
 import * as identify from '/static/pages/identify.js';
 import * as search from '/static/pages/search.js';
 import * as people from '/static/pages/people.js';
+import * as gallery from '/static/pages/gallery.js';
 import * as objects from '/static/pages/objects.js';
 import * as settings from '/static/pages/settings.js';
 import * as phone from '/static/pages/phone.js';
@@ -110,14 +111,22 @@ export function modal(build) {
   const backdrop = el('div', { class: 'modal-backdrop' });
   const box = el('div', { class: 'modal' });
   backdrop.append(box);
-  const close = () => backdrop.remove();
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  const close = () => { backdrop.remove(); window.removeEventListener('keydown', esc); };
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-  window.addEventListener('keydown', function esc(e) {
-    if (e.key === 'Escape') { close(); window.removeEventListener('keydown', esc); }
-  });
+  window.addEventListener('keydown', esc);
   build(box, close);
   root.append(backdrop);
   return close;
+}
+
+// object-URL registry: pages register created URLs; the router revokes them
+// on navigation so long sessions don't leak memory
+const objectUrls = new Set();
+export function trackUrl(url) { objectUrls.add(url); return url; }
+function revokeUrls() {
+  for (const u of objectUrls) URL.revokeObjectURL(u);
+  objectUrls.clear();
 }
 
 export function confirmModal(text, onYes, yesLabel = 'Delete') {
@@ -153,6 +162,7 @@ const routes = [
   { match: /^#\/search$/, page: search, id: 'search' },
   { match: /^#\/people$/, page: people, id: 'people' },
   { match: /^#\/people\/(\d+)$/, page: people, id: 'people' },
+  { match: /^#\/gallery$/, page: gallery, id: 'gallery' },
   { match: /^#\/objects$/, page: objects, id: 'objects' },
   { match: /^#\/settings$/, page: settings, id: 'settings' },
   { match: /^#\/phone$/, page: phone, id: 'phone' },
@@ -166,6 +176,7 @@ async function route() {
   const params = hash.match(r.match)?.slice(1) || [];
 
   if (current?.unmount) { try { current.unmount(); } catch { /* page cleanup */ } }
+  revokeUrls(); // free any blob previews the old page created
   current = r.page;
 
   document.querySelectorAll('.navlink').forEach((a) =>

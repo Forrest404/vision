@@ -139,7 +139,9 @@ class FaceEngine:
         crop = self._rec.alignCrop(bgr, face_row.astype(np.float32))
         feat = self._rec.feature(crop).flatten().astype(np.float32)
         norm = float(np.linalg.norm(feat))
-        return feat / norm if norm > 0 else feat
+        if norm <= 0:  # degenerate output: match nothing rather than garbage
+            return np.zeros_like(feat)
+        return feat / norm
 
     def detect_and_embed(self, bgr: np.ndarray) -> list[dict]:
         """Detect all faces and embed each. Embeddings/crops run on the same

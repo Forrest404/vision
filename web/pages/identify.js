@@ -1,5 +1,5 @@
 // Identify: upload one photo; known faces get named, nothing is stored.
-import { $, el, api, toast, photoWithFaces, handoff } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, handoff, trackUrl } from '/static/app.js?v=2';
 
 let lastFile = null;
 
@@ -33,7 +33,7 @@ async function identify(file) {
   lastFile = file;
   const out = $('#idResult');
   out.innerHTML = '';
-  out.append(el('p', { class: 'muted' }, 'Analyzing…'));
+  out.append(el('p', { class: 'muted' }, el('span', { class: 'spinner' }), ' Analyzing…'));
 
   try {
     const res = await api.upload('/api/identify', file, 'file');
@@ -46,7 +46,7 @@ async function identify(file) {
       tag: f.match ? `${f.match.name} ${f.match.score.toFixed(2)}` : 'Unknown',
     }));
 
-    const url = URL.createObjectURL(file);
+    const url = trackUrl(URL.createObjectURL(file));
     const summary = res.faces.length === 0
       ? 'No faces detected.'
       : `${res.faces.length} face${res.faces.length === 1 ? '' : 's'} — ${known.length} recognized.`;

@@ -10,6 +10,8 @@ server.py injects the shared objects at startup:
                       the pipeline's engine so uploads don't stall the feed)
 """
 
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -84,49 +86,59 @@ def upload_photos(files: list[UploadFile] = File(...)):
     results = []
     added_faces = False
     for up in files:
-        data = up.file.read(MAX_BYTES + 1)
-        if len(data) > MAX_BYTES:
-            results.append({"original_name": up.filename, "error": "file too large (20 MB max)"})
-            continue
-        photo, bgr, duplicate = db.add_photo(data, up.filename)
-        if photo is None:
-            results.append({"original_name": up.filename, "error": "could not decode image"})
-            continue
-
-        if duplicate:
-            faces = [
-                {**_face_json(f), "suggestion": None}
-                for f in db.faces_of_photo(photo["id"])
-            ]
-        else:
-            faces = []
-            for det in engine.detect_and_embed(bgr):
-                face_id = db.add_face(
-                    photo["id"], det["bbox"], det["landmarks"],
-                    det["score"], det["embedding"], image=bgr,
-                )
-                hit = db.index.match(det["embedding"], threshold)
-                faces.append({
-                    "face_id": face_id,
-                    "photo_id": photo["id"],
-                    "person_id": None,
-                    "person_name": None,
-                    "bbox": dict(zip("xywh", det["bbox"])),
-                    "landmarks": det["landmarks"],
-                    "score": det["score"],
-                    "crop_url": f"/media/crops/{face_id}.jpg",
-                    "suggestion": (
-                        {"person_id": hit[0], "name": hit[1], "score": round(hit[2], 3)}
-                        if hit else None
-                    ),
-                })
-                added_faces = True
-
-        results.append({**_photo_json(photo), "duplicate": duplicate, "faces": faces})
+        try:
+            entry, faces_added = _ingest_one(db, engine, up, threshold)
+        except Exception as exc:  # one bad file must not fail the batch
+            entry, faces_added = {"original_name": up.filename,
+                                  "error": f"processing failed: {exc}"}, False
+        results.append(entry)
+        added_faces = added_faces or faces_added
 
     if added_faces:
         db.index.rebuild()  # make the new (unlabeled) faces searchable
     return {"results": results}
+
+
+def _ingest_one(db: fdb.FaceDB, engine, up: UploadFile, threshold: float):
+    """Store one uploaded photo + its faces; returns (result entry, added?)."""
+    data = up.file.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        return {"original_name": up.filename, "error": "file too large (20 MB max)"}, False
+    photo, bgr, duplicate = db.add_photo(data, up.filename)
+    if photo is None:
+        return {"original_name": up.filename, "error": "could not decode image"}, False
+
+    added = False
+    if duplicate:
+        faces = [
+            {**_face_json(f), "suggestion": None}
+            for f in db.faces_of_photo(photo["id"])
+        ]
+    else:
+        faces = []
+        for det in engine.detect_and_embed(bgr):
+            face_id = db.add_face(
+                photo["id"], det["bbox"], det["landmarks"],
+                det["score"], det["embedding"], image=bgr,
+            )
+            hit = db.index.match(det["embedding"], threshold)
+            faces.append({
+                "face_id": face_id,
+                "photo_id": photo["id"],
+                "person_id": None,
+                "person_name": None,
+                "bbox": dict(zip("xywh", det["bbox"])),
+                "landmarks": det["landmarks"],
+                "score": det["score"],
+                "crop_url": f"/media/crops/{face_id}.jpg",
+                "suggestion": (
+                    {"person_id": hit[0], "name": hit[1], "score": round(hit[2], 3)}
+                    if hit else None
+                ),
+            })
+            added = True
+
+    return {**_photo_json(photo), "duplicate": duplicate, "faces": faces}, added
 
 
 @router.post("/identify")
@@ -367,6 +379,35 @@ def search_face(file: UploadFile = File(...), face_index: int | None = Form(None
 def clear_library():
     """Delete every person, photo and face from the on-device database."""
     return {"ok": True, "deleted": _db().clear_all()}
+
+
+@router.get("/library/stats")
+def library_stats():
+    return _db().stats()
+
+
+@router.get("/library/export")
+def export_library():
+    """Download the whole library (database + photos) as one zip backup."""
+    import tempfile
+    import zipfile
+    from starlette.background import BackgroundTask
+    from fastapi.responses import FileResponse
+
+    _db().checkpoint()  # flush WAL so the backup includes the latest writes
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:  # JPEGs don't recompress
+        if fdb.DB_PATH.exists():
+            zf.write(fdb.DB_PATH, "data/faces.db")
+        for directory in (fdb.PHOTOS_DIR, fdb.THUMBS_DIR, fdb.CROPS_DIR):
+            for f in sorted(directory.glob("*")):
+                zf.write(f, f"data/media/{directory.name}/{f.name}")
+    tmp.close()
+    import time as _time
+    stamp = _time.strftime("%Y-%m-%d")
+    return FileResponse(tmp.name, media_type="application/zip",
+                        filename=f"facevision-backup-{stamp}.zip",
+                        background=BackgroundTask(lambda: Path(tmp.name).unlink(missing_ok=True)))
 
 
 @router.get("/cameras")

@@ -37,9 +37,23 @@ app = FastAPI(title="FaceVision")
 
 
 @app.middleware("http")
-async def cache_headers(request, call_next):
-    """The UI must always revalidate (the old app's files got heuristically
-    cached by browsers); stored photos are immutable so they may cache."""
+async def guard_and_cache(request, call_next):
+    """Two jobs:
+    1. Reject cross-site requests: a malicious web page you happen to visit
+       could otherwise poke our side-effect endpoints on localhost/LAN.
+       Browsers attach an Origin header to cross-origin requests — if it
+       doesn't match the Host we're being addressed as, refuse.
+    2. Cache headers: the UI must always revalidate (the old app's files got
+       heuristically cached); stored photos are immutable so they may cache.
+    """
+    origin = request.headers.get("origin")
+    if origin:
+        from urllib.parse import urlsplit
+        if urlsplit(origin).netloc != request.headers.get("host", ""):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "cross-origin requests are not allowed"},
+                                status_code=403)
+
     resp = await call_next(request)
     path = request.url.path
     if path == "/" or path.startswith("/static"):

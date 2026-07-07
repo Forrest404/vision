@@ -355,6 +355,12 @@ class FaceDB:
         if name:
             person_id = self.find_or_create_person(name)
         with self._lock:
+            # if this face was someone else's avatar, drop that stale cover
+            self._conn.execute(
+                "UPDATE persons SET cover_face_id=NULL "
+                "WHERE cover_face_id=? AND id IS NOT ?",
+                (face_id, person_id),
+            )
             self._conn.execute(
                 "UPDATE faces SET person_id=? WHERE id=?", (person_id, face_id)
             )
@@ -530,16 +536,36 @@ class FaceDB:
         return _deep_merge(DEFAULT_SETTINGS, stored)
 
     def set_settings(self, partial: dict) -> dict:
-        merged = _deep_merge(self.get_settings(), partial)
+        """Persist ONLY what the user changed (merged with prior changes).
+        Untouched keys keep following DEFAULT_SETTINGS, so new defaults in
+        future versions aren't frozen out by old snapshots."""
         with self._lock:
-            for key, value in merged.items():
+            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
+            stored = {r["key"]: json.loads(r["value"]) for r in rows}
+            stored = _deep_merge(stored, partial)
+            for key, value in stored.items():
                 self._conn.execute(
                     "INSERT INTO settings (key, value) VALUES (?, ?) "
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (key, json.dumps(value)),
                 )
             self._conn.commit()
-        return merged
+        return _deep_merge(DEFAULT_SETTINGS, stored)
+
+    def checkpoint(self):
+        """Flush the WAL into the main DB file (for consistent backups)."""
+        with self._lock:
+            self._conn.execute("PRAGMA wal_checkpoint(FULL)")
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "persons": self._conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0],
+                "photos": self._conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0],
+                "faces": self._conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0],
+                "unlabeled_faces": self._conn.execute(
+                    "SELECT COUNT(*) FROM faces WHERE person_id IS NULL").fetchone()[0],
+            }
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

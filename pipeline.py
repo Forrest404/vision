@@ -12,6 +12,7 @@ import colorsys
 import os
 import threading
 import time
+from collections import Counter
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
@@ -312,10 +313,9 @@ class FaceTracker:
                 votes = [v for v in track["votes"] if v]
                 name, pid, score = None, None, 0.0
                 if votes:
-                    best = max(set((v[0], v[1]) for v in votes),
-                               key=lambda nv: sum(1 for v in votes if (v[0], v[1]) == nv))
-                    pid, name = best
-                    score = max(v[2] for v in votes if (v[0], v[1]) == best)
+                    counts = Counter((v[0], v[1]) for v in votes)
+                    (pid, name), _n = counts.most_common(1)[0]
+                    score = max(v[2] for v in votes if (v[0], v[1]) == (pid, name))
                 out.append({**track, "person_id": pid, "name": name, "score": score})
         return out
 
@@ -536,41 +536,58 @@ def pipeline(source):
 
         start = time.perf_counter()
 
-        if cfg["mode"] == "faces":
-            engine = face_runtime["engine"]
-            if engine is None:
-                publish(message_frame("Face models loading..."), fps, 0, "faces",
-                        error="face models loading")
-                time.sleep(0.25)  # don't spin while the one-time download runs
-                continue
-            dets = engine.detect(frame)
-            tracks = tracker.update(dets, frame, cfg["face"])
-            count = draw_faces(frame, tracks, cfg["face"])
-            name = "yunet+sface"
-        else:
-            name = FASTSAM_MODEL if cfg["mode"] == "sam" else YOLO_SIZES[cfg["size"]]
-            model = bank.get(name)
-
-            kwargs = dict(
-                device=device, retina_masks=True, conf=cfg["conf"],
-                max_det=100, verbose=False,
-            )
-            if cfg["mode"] == "yolo":
-                # always pass classes — the persistent predictor remembers the last
-                # value, so omitting the kwarg would keep a stale filter forever
-                kwargs["classes"] = cfg["classes"] or None
-                # ByteTrack keeps objects through brief misses -> smooth, stable masks
-                result = model.track(frame, persist=True, **kwargs)[0]
-            else:
-                # 60 masks keeps "segment everything" real-time at full-res masks
-                kwargs["max_det"] = 60
-                result = model.predict(frame, iou=0.9, **kwargs)[0]
-
-            count = draw(frame, result, cfg)
+        try:
+            count, name = _process_frame(frame, cfg, tracker)
+        except Exception as exc:  # never let one bad frame kill the feed
+            print(f"pipeline error: {exc!r}")
+            publish(message_frame(f"Processing error:\n{exc}"), fps, 0, "-",
+                    error=str(exc))
+            time.sleep(0.5)
+            continue
+        if count is None:  # face models still loading
+            time.sleep(0.25)
+            continue
 
         inst = 1.0 / max(time.perf_counter() - start, 1e-6)
         fps = inst if fps == 0 else fps * 0.9 + inst * 0.1
         publish(frame, fps, count, name)
+
+
+def _process_frame(frame, cfg: dict, tracker: "FaceTracker"):
+    """Run one frame through the selected model; returns (count, model_name),
+    or (None, name) when the face models are still downloading."""
+    if cfg["mode"] == "faces":
+        engine = face_runtime["engine"]
+        if engine is None:
+            publish(message_frame("Face models loading..."), 0.0, 0, "faces",
+                    error="face models loading")
+            return None, "faces"
+        dets = engine.detect(frame)
+        tracks = tracker.update(dets, frame, cfg["face"])
+        count = draw_faces(frame, tracks, cfg["face"])
+        name = "yunet+sface"
+    else:
+        name = FASTSAM_MODEL if cfg["mode"] == "sam" else YOLO_SIZES[cfg["size"]]
+        model = bank.get(name)
+
+        kwargs = dict(
+            device=device, retina_masks=True, conf=cfg["conf"],
+            max_det=100, verbose=False,
+        )
+        if cfg["mode"] == "yolo":
+            # always pass classes — the persistent predictor remembers the last
+            # value, so omitting the kwarg would keep a stale filter forever
+            kwargs["classes"] = cfg["classes"] or None
+            # ByteTrack keeps objects through brief misses -> smooth, stable masks
+            result = model.track(frame, persist=True, **kwargs)[0]
+        else:
+            # 60 masks keeps "segment everything" real-time at full-res masks
+            kwargs["max_det"] = 60
+            result = model.predict(frame, iou=0.9, **kwargs)[0]
+
+        count = draw(frame, result, cfg)
+
+    return count, name
 
 
 def start(source=None) -> threading.Thread:

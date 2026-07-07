@@ -129,6 +129,9 @@ def _analyze(tracker: "pl.FaceTracker", jpeg: bytes) -> dict:
     engine = routes_faces.runtime["engine"]
     if engine is None:
         return {"error": "face models not loaded"}
+    # bind lazily: if the models finished loading after this connection
+    # opened, adopt the upload engine now (never the pipeline's private one)
+    tracker._engine = engine
 
     with pl.state_lock:
         face_cfg = dict(pl.state["face"])
@@ -161,15 +164,17 @@ async def phone_stream(ws: WebSocket):
         await ws.send_json({"error": "pairing is turned off in Settings"})
         await ws.close(code=1008)
         return
-    engine = routes_faces.runtime["engine"]
-    tracker = pl.FaceTracker(engine=engine)
+    tracker = pl.FaceTracker(engine=routes_faces.runtime["engine"])
     try:
         while True:
             jpeg = await ws.receive_bytes()
             if not phone_enabled():  # toggled off mid-stream
                 await ws.close(code=1008)
                 return
-            result = await run_in_threadpool(_analyze, tracker, jpeg)
+            try:
+                result = await run_in_threadpool(_analyze, tracker, jpeg)
+            except Exception as exc:  # one bad frame must not kill the stream
+                result = {"error": f"processing failed: {exc}"}
             await ws.send_json(result)
     except WebSocketDisconnect:
         pass

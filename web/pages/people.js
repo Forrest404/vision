@@ -59,7 +59,8 @@ async function peopleList(root) {
         },
           p.cover_url
             ? el('img', { class: 'avatar', src: p.cover_url, alt: p.name })
-            : el('div', { class: 'avatar placeholder' }, p.name[0]?.toUpperCase() || '?'),
+            : el('div', { class: 'avatar placeholder', role: 'img', 'aria-label': p.name },
+                p.name[0]?.toUpperCase() || '?'),
           el('div', { class: 'pname' }, p.name),
           el('div', { class: 'pmeta' }, /^\d+$/.test(p.name)
             ? 'auto-captured · open to rename'

@@ -578,6 +578,19 @@ input[type="range"]::-moz-range-thumb {
 .toast.err { border-left-color: var(--red); }
 @keyframes slidein { from { transform: translateX(20px); opacity: 0; } }
 
+/* -------------------------------- spinner ------------------------------ */
+
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ----------------------------- empty state ---------------------------- */
 
 .empty {

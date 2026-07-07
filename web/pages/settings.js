@@ -93,16 +93,31 @@ export async function mount(root) {
             'Higher resolutions find smaller faces but lower the frame rate.')),
 
         el('div', { class: 'card', id: 'aboutCard' },
-          el('h2', {}, 'About'),
-          el('p', { class: 'muted', style: 'margin:0 0 8px' },
-            'Everything runs on this device: YuNet face detection, SFace embeddings, YOLO11-seg and FastSAM. ' +
-            'The face database lives in the project\'s data/ folder.'),
-          el('p', { class: 'muted', style: 'margin:0' },
-            'Delete data/ to wipe all stored faces and photos.')),
+          el('h2', {}, 'Library'),
+          el('div', { class: 'statgrid', id: 'libStats', style: 'margin-bottom:12px' }),
+          el('a', { class: 'btn wide', href: '/api/library/export', download: '' }, 'Export backup (.zip)'),
+          el('p', { class: 'muted', style: 'margin:10px 0 0;font-size:.76rem' },
+            'Everything runs on this device: YuNet detection, SFace embeddings, ' +
+            'YOLO11-seg and FastSAM. The backup zip contains the database and every photo — ' +
+            'restore by unzipping it over the project\'s data/ folder.')),
       )));
 
   loadCameras(s.camera.index ?? 0);
   renderQR(!!s.phone?.enabled);
+  loadStats();
+}
+
+async function loadStats() {
+  const grid = document.getElementById('libStats');
+  try {
+    const s = await api.get('/api/library/stats');
+    if (!grid || !grid.isConnected) return;
+    const stat = (k, v) => el('div', { class: 'stat' },
+      el('div', { class: 'k' }, k), el('div', { class: 'v' }, v));
+    grid.append(
+      stat('People', s.persons), stat('Photos', s.photos),
+      stat('Faces', s.faces), stat('Unnamed', s.unlabeled_faces));
+  } catch { /* server warming up */ }
 }
 
 async function renderQR(enabled) {
@@ -146,7 +161,7 @@ async function loadCameras(currentIndex) {
     });
     holder.append(sel);
   } catch (err) {
-    if (holder) {
+    if (holder && holder.isConnected) {
       holder.innerHTML = '';
       holder.append(el('span', { class: 'muted' }, `Could not list cameras: ${err.message}`));
     }
