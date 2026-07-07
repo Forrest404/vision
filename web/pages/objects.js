@@ -65,6 +65,10 @@ function toggleClass(id) {
 export async function mount(root) {
   send(`/set_mode?mode=${lastObjectMode}`);
 
+  const camInput = el('input', { type: 'checkbox', id: 'camToggle' });
+  camInput.checked = true;
+  camInput.addEventListener('change', () => send(`/set_camera?on=${camInput.checked}`));
+
   root.append(el('div', { class: 'live-layout' },
     el('div', { class: 'live-feed' },
       el('span', { id: 'liveBadge' }, el('span', { id: 'liveDot' }), 'LIVE'),
@@ -74,6 +78,12 @@ export async function mount(root) {
       el('div', { class: 'statgrid' },
         el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Objects'), el('div', { class: 'v', id: 'objCount' }, '0')),
         el('div', { class: 'stat' }, el('div', { class: 'k' }, 'FPS'), el('div', { class: 'v', id: 'fpsStat' }, '0'))),
+
+      el('div', { class: 'card' },
+        el('h2', {}, 'Camera'),
+        el('label', { class: 'switch' }, camInput, el('span', { class: 'track' }), 'Camera on'),
+        el('p', { class: 'muted', style: 'margin:6px 0 0' },
+          'The camera also turns off whenever you leave this page.')),
 
       el('div', { class: 'card' },
         el('h2', {}, 'Mode ', el('span', { class: 'hint', id: 'modelName' }, '')),
@@ -110,6 +120,7 @@ export async function mount(root) {
 
   try {
     const info = await api.get('/api/info');
+    if (typeof info.state?.camera_on === 'boolean') camInput.checked = info.state.camera_on;
     const grid = $('#classGrid');
     if (grid) {
       info.classes.forEach((name, id) => {
@@ -125,6 +136,7 @@ export async function mount(root) {
     $('#objCount').textContent = st.objects;
     $('#fpsStat').textContent = st.fps.toFixed(1);
     $('#modelName').textContent = st.model.replace('.pt', '');
+    if (typeof st.camera_on === 'boolean') camInput.checked = st.camera_on;
     if (st.mode === 'faces') return; // another page just switched modes
     S.mode = st.mode;
     S.size = st.size;

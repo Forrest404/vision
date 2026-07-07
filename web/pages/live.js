@@ -17,6 +17,11 @@ export async function mount(root) {
   const info = await api.get('/api/info').catch(() => ({ face_ready: true }));
   const settings = await api.get('/api/settings').catch(() => null);
 
+  const camInput = el('input', { type: 'checkbox', id: 'camToggle' });
+  camInput.checked = info.state?.camera_on ?? true;
+  camInput.addEventListener('change', () =>
+    api.get(`/set_camera?on=${camInput.checked}`).catch((e) => toast(e.message, 'err')));
+
   root.append(el('div', { class: 'live-layout' },
     el('div', { class: 'live-feed' },
       el('span', { id: 'liveBadge' }, el('span', { id: 'liveDot' }), 'LIVE'),
@@ -31,6 +36,12 @@ export async function mount(root) {
       el('div', { class: 'statgrid' },
         el('div', { class: 'stat' }, el('div', { class: 'k' }, 'Faces'), el('div', { class: 'v', id: 'faceCount' }, '0')),
         el('div', { class: 'stat' }, el('div', { class: 'k' }, 'FPS'), el('div', { class: 'v', id: 'fpsStat' }, '0'))),
+
+      el('div', { class: 'card' },
+        el('h2', {}, 'Camera'),
+        el('label', { class: 'switch' }, camInput, el('span', { class: 'track' }), 'Camera on'),
+        el('p', { class: 'muted', style: 'margin:6px 0 0' },
+          'The camera also turns off whenever you leave this page.')),
 
       el('div', { class: 'card' },
         el('h2', {}, 'Recognition threshold ', el('output', { id: 'thrOut' }, settings ? settings.rec_threshold.toFixed(2) : '—')),
@@ -69,6 +80,7 @@ export async function mount(root) {
   statusFn = (st) => {
     $('#faceCount') && ($('#faceCount').textContent = st.objects);
     $('#fpsStat') && ($('#fpsStat').textContent = st.fps.toFixed(1));
+    if (typeof st.camera_on === 'boolean') camInput.checked = st.camera_on;
   };
   status.listeners.add(statusFn);
 }

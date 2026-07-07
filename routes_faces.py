@@ -363,6 +363,12 @@ def search_face(file: UploadFile = File(...), face_index: int | None = Form(None
 
 # -------------------------------- settings --------------------------------
 
+@router.delete("/library")
+def clear_library():
+    """Delete every person, photo and face from the on-device database."""
+    return {"ok": True, "deleted": _db().clear_all()}
+
+
 @router.get("/cameras")
 def list_cameras():
     """Probe attached cameras (with device names on macOS)."""

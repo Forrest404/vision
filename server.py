@@ -65,18 +65,24 @@ app.include_router(routes_faces.router)
 @app.get("/video_feed")
 def video_feed():
     def gen():
-        seen = 0
-        while True:
-            with pl.out_cond:
-                pl.out_cond.wait_for(lambda: pl.latest["seq"] != seen, timeout=1.0)
-                if pl.latest["seq"] == seen or pl.latest["jpeg"] is None:
-                    continue
-                seen = pl.latest["seq"]
-                buf = pl.latest["jpeg"]
-            yield (
-                b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
-                + str(len(buf)).encode() + b"\r\n\r\n" + buf + b"\r\n"
-            )
+        # The camera only runs while someone is actually watching: each open
+        # stream counts as a viewer, and the pipeline parks the camera at zero.
+        pl.viewer_delta(+1)
+        try:
+            seen = 0
+            while True:
+                with pl.out_cond:
+                    pl.out_cond.wait_for(lambda: pl.latest["seq"] != seen, timeout=1.0)
+                    if pl.latest["seq"] == seen or pl.latest["jpeg"] is None:
+                        continue
+                    seen = pl.latest["seq"]
+                    buf = pl.latest["jpeg"]
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(buf)).encode() + b"\r\n\r\n" + buf + b"\r\n"
+                )
+        finally:
+            pl.viewer_delta(-1)
     return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
@@ -95,6 +101,13 @@ async def info():
         "face_ready": pl.face_runtime["engine"] is not None,
         "state": pl.current_state(),
     }
+
+
+@app.get("/set_camera")
+async def set_camera(on: bool = True):
+    with pl.state_lock:
+        pl.state["camera_on"] = bool(on)
+    return pl.current_state()
 
 
 @app.get("/set_mode")

@@ -20,7 +20,21 @@ async function peopleList(root) {
       el('h1', {}, 'People'),
       el('span', { class: 'sub', id: 'peopleCount' }, '')),
     el('div', { class: 'page-body' },
-      el('div', { class: 'searchbar' }, searchInput),
+      el('div', { class: 'searchbar' },
+        searchInput,
+        el('button', {
+          class: 'danger', title: 'Delete every person, photo and face',
+          onclick: () => confirmModal(
+            'Delete EVERYTHING? Every person, every photo and every face is ' +
+            'permanently removed from this device. This cannot be undone.',
+            async () => {
+              try {
+                const res = await api.del('/api/library');
+                toast(`Deleted ${res.deleted.persons} people, ${res.deleted.photos} photos`, 'ok');
+                renderGrid(searchInput.value);
+              } catch (err) { toast(err.message, 'err'); }
+            }, 'Delete everything'),
+        }, 'Delete all')),
       el('div', { class: 'people-grid', id: 'peopleGrid' })));
 
   let timer = null;
@@ -83,9 +97,11 @@ async function personDetail(root, personId) {
         onclick: () => confirmModal(
           `Delete "${person.name}"? Their photos stay in the library; the faces become unlabeled.`,
           async () => {
-            await api.del(`/api/persons/${person.id}`).catch((e) => toast(e.message, 'err'));
-            toast('Person deleted', 'ok');
-            location.hash = '#/people';
+            try {
+              await api.del(`/api/persons/${person.id}`);
+              toast('Person deleted', 'ok');
+              location.hash = '#/people';
+            } catch (e) { toast(e.message, 'err'); }
           }),
       }, 'Delete person')),
     el('div', { class: 'page-body', style: 'display:flex;flex-direction:column;gap:20px' },

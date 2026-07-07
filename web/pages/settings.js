@@ -43,10 +43,10 @@ export async function mount(root) {
             (v) => push({ auto_enroll: { enabled: v } })),
           el('p', { class: 'muted', style: 'margin:0 0 12px;font-size:.76rem' },
             'Clear unknown faces are stored as numbered people (1000, 2000, …) with a snapshot. Rename them on the People page.'),
-          slider('Capture quality', s.auto_enroll?.min_score ?? 0.8, 0.5, 0.95, 0.01,
+          slider('Capture quality', s.auto_enroll?.min_score ?? 0.6, 0.3, 0.95, 0.01,
             (v) => push({ auto_enroll: { min_score: v } }),
-            'How confident the detector must be before a stranger is saved. Higher = fewer but cleaner captures.'),
-          slider('Min face size (px)', s.auto_enroll?.min_size ?? 80, 40, 200, 5,
+            'How confident the detector must be before a stranger is saved. Lower captures more (a few soft shots included); higher = fewer but cleaner.'),
+          slider('Min face size (px)', s.auto_enroll?.min_size ?? 60, 40, 200, 5,
             (v) => push({ auto_enroll: { min_size: v } }),
             'Faces smaller than this on screen are too far away to enroll reliably.')),
 

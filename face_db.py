@@ -82,8 +82,14 @@ DEFAULT_SETTINGS = {
     "camera": {"width": 1280, "height": 720, "index": 0},
     # Live feed auto-captures clear unknown faces as numbered people
     # (1000, 2000, ...) that can be renamed later on the People page.
-    "auto_enroll": {"enabled": True, "min_score": 0.8, "min_size": 80},
+    # Defaults favor CAPTURING over missing someone.
+    "auto_enroll": {"enabled": True, "min_score": 0.6, "min_size": 60},
 }
+
+# Earlier builds persisted these stricter auto-capture values as user
+# settings; if they're stored untouched, drop them so the new capture-first
+# defaults apply.
+_STALE_AUTO_ENROLL = {"enabled": True, "min_score": 0.8, "min_size": 80}
 
 
 def decode_image(data: bytes) -> np.ndarray | None:
@@ -180,7 +186,17 @@ class FaceDB:
                 "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;" + _SCHEMA
             )
             self._conn.commit()
+        self._migrate_settings()
         self.index = EmbeddingIndex(self)
+
+    def _migrate_settings(self):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM settings WHERE key='auto_enroll'"
+            ).fetchone()
+            if row and json.loads(row["value"]) == _STALE_AUTO_ENROLL:
+                self._conn.execute("DELETE FROM settings WHERE key='auto_enroll'")
+                self._conn.commit()
 
     # ------------------------------- photos -------------------------------
 
@@ -483,6 +499,25 @@ class FaceDB:
         if cur.rowcount:
             self.index.rebuild()
         return bool(cur.rowcount)
+
+    def clear_all(self) -> dict:
+        """Wipe the whole library: every person, photo, face and media file.
+        Settings are kept."""
+        with self._lock:
+            counts = {
+                "persons": self._conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0],
+                "photos": self._conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0],
+                "faces": self._conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0],
+            }
+            self._conn.execute("DELETE FROM faces")
+            self._conn.execute("DELETE FROM photos")
+            self._conn.execute("DELETE FROM persons")
+            self._conn.commit()
+        for directory in (PHOTOS_DIR, THUMBS_DIR, CROPS_DIR):
+            for f in directory.glob("*"):
+                f.unlink(missing_ok=True)
+        self.index.rebuild()
+        return counts
 
     # ------------------------------ settings ------------------------------
 

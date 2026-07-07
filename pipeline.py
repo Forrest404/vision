@@ -69,6 +69,8 @@ state = {
     "face": {},       # recognition/overlay settings, loaded from the DB at startup
     "camera": {"width": 1280, "height": 720, "index": 0},
     "camera_restart": False,  # set True after changing camera size/device
+    "camera_on": True,   # the user's switch — the camera never opens while False
+    "viewers": 0,        # open /video_feed connections; camera idles at zero
 }
 state_lock = threading.Lock()
 
@@ -83,6 +85,12 @@ bank = ModelBank(device)
 
 # Set by server startup (needs face models + DB); None until then.
 face_runtime = {"engine": None, "index": None, "db": None}
+
+
+def viewer_delta(n: int):
+    """Track open /video_feed connections (server calls this per stream)."""
+    with state_lock:
+        state["viewers"] = max(0, state["viewers"] + n)
 
 
 def current_state() -> dict:
@@ -185,9 +193,10 @@ def hex_to_bgr(value: str, fallback=(248, 189, 56)) -> tuple:
         return fallback
 
 
-def face_is_sharp(frame: np.ndarray, row, blur_threshold: float = 60.0) -> bool:
-    """Variance-of-Laplacian focus check on the face region — rejects
-    motion blur / out-of-focus frames so junk never enters the database."""
+def face_is_sharp(frame: np.ndarray, row, blur_threshold: float = 25.0) -> bool:
+    """Variance-of-Laplacian focus check on the face region. Deliberately
+    lenient: it only rejects heavy motion blur — a slightly soft face is
+    still worth capturing."""
     x, y, w, h = (int(v) for v in row[:4])
     ih, iw = frame.shape[:2]
     x1, y1 = max(0, x), max(0, y)
@@ -210,9 +219,16 @@ class FaceTracker:
     IOU_MATCH = 0.3
     MAX_MISSES = 10
     EMBED_INTERVAL = 15       # ~0.5 s at 30 FPS
-    EMBED_INTERVAL_UNKNOWN = 10
+    EMBED_INTERVAL_UNKNOWN = 6
     BOX_SMOOTH = 0.6          # EMA weight of the newest box
     VOTE_SLOTS = 5
+
+    # Auto-capture confirmation: an unknown face is only saved after the
+    # track has lived this many frames AND two embeddings taken on separate
+    # frames agree — random objects never manage both. Tuned toward
+    # CAPTURING (a slightly soft frame is fine; missing a person is not).
+    ENROLL_MIN_AGE = 4
+    ENROLL_CONSISTENCY = 0.5  # cosine between the two confirmation samples
 
     def __init__(self):
         self._tracks: list[dict] = []
@@ -257,6 +273,7 @@ class FaceTracker:
             track["bbox"] = [a * n + (1 - a) * o for n, o in zip(row[:4], track["bbox"])]
             track["row"] = row
             track["misses"] = 0
+            track["age"] += 1
             track["frames_since_embed"] += 1
             interval = (self.EMBED_INTERVAL if any(track["votes"])
                         else self.EMBED_INTERVAL_UNKNOWN)
@@ -275,7 +292,7 @@ class FaceTracker:
                 continue
             track = {
                 "id": self._next_id, "bbox": list(row[:4]), "row": row,
-                "misses": 0, "frames_since_embed": 0, "votes": [],
+                "misses": 0, "age": 1, "frames_since_embed": 0, "votes": [],
             }
             self._next_id += 1
             self._embed_and_vote(track, frame, engine, index, threshold, auto)
@@ -307,26 +324,59 @@ class FaceTracker:
         hit = index.match(emb, threshold)
         if hit is None and auto.get("enabled") and not track.get("enrolled"):
             # a clear stranger: save them as the next numbered person
-            hit = self._auto_enroll(track, frame, emb, auto)
+            hit = self._auto_enroll(track, frame, emb, auto, threshold)
         track["votes"].append(hit)  # None counts as an "Unknown" vote
         if len(track["votes"]) > self.VOTE_SLOTS:
             track["votes"].pop(0)
 
     def _auto_enroll(self, track: dict, frame: np.ndarray,
-                     emb: np.ndarray, auto: dict):
+                     emb: np.ndarray, auto: dict, threshold: float):
         """Store a clear unknown face as person 1000/2000/... Returns the
         vote tuple for the new identity, or None if quality gates fail
-        (they retry on the next scheduled embed)."""
+        (they retry on the next scheduled embed).
+
+        Every gate must pass on TWO separate frames, and the two embeddings
+        must agree, before anything is written — a face-shaped object can't
+        get enrolled from one lucky frame."""
         db = face_runtime["db"]
         row = track["row"]
         if db is None:
             return None
-        if float(row[14]) < float(auto.get("min_score", 0.8)):
+        if float(row[14]) < float(auto.get("min_score", 0.6)):
+            track["pending_emb"] = None  # confirmation restarts after any failure
             return None
-        if min(float(row[2]), float(row[3])) < float(auto.get("min_size", 80)):
+        w, h = float(row[2]), float(row[3])
+        if min(w, h) < float(auto.get("min_size", 60)):
+            track["pending_emb"] = None
+            return None
+        if not 0.4 <= w / max(h, 1.0) <= 1.5:  # real faces have face-like proportions
+            track["pending_emb"] = None
             return None
         if not face_is_sharp(frame, row):
+            track["pending_emb"] = None
             return None
+
+        # two-sighting confirmation across separate frames
+        pending = track.get("pending_emb")
+        if pending is None or track["age"] < self.ENROLL_MIN_AGE:
+            track["pending_emb"] = emb  # first clear sample; confirm on the next embed
+            return None
+        if float(np.dot(pending, emb)) < self.ENROLL_CONSISTENCY:
+            track["pending_emb"] = emb  # inconsistent — not a stable face; start over
+            return None
+
+        # Already stored? A face this similar may exist UNLABELED (a library
+        # upload nobody named, or a deleted person's old face). Give that
+        # existing face the new number instead of storing a duplicate.
+        for hit in db.index.match_all(emb, threshold):
+            if hit["person_id"] is None:
+                name = db.next_auto_name()
+                face = db.label_face(hit["face_id"], name=name)
+                db.index.rebuild()
+                track["enrolled"] = True
+                if face and face.get("person_id") is not None:
+                    return (face["person_id"], name, 1.0)
+                return None
 
         ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
         if not ok:
@@ -412,6 +462,12 @@ def frame_source(source):
         with state_lock:
             cam = dict(state["camera"])
             state["camera_restart"] = False
+            wanted = state["camera_on"] and state["viewers"] > 0
+        if not wanted:
+            # switch off, or nobody watching the feed: keep the camera closed
+            publish(message_frame("Camera is off"), 0.0, 0, "-", error="camera off")
+            time.sleep(0.3)
+            continue
         cap = open_camera(index=cam.get("index", 0),
                           width=cam["width"], height=cam["height"])
         if not cap.isOpened():
@@ -425,9 +481,10 @@ def frame_source(source):
             continue
         while True:
             with state_lock:
-                if state["camera_restart"]:
+                if (state["camera_restart"]
+                        or not (state["camera_on"] and state["viewers"] > 0)):
                     cap.release()
-                    break  # reopen at the new size
+                    break  # reopen at the new size, or park until wanted again
             ok, frame = cap.read()
             if not ok:
                 cap.release()
