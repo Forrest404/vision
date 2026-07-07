@@ -11,6 +11,7 @@ Uses the openssl CLI that ships with macOS/Linux. All files in certs/
 (gitignored).
 """
 
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -28,9 +29,30 @@ def _run(*args: str):
 
 
 def primary_lan_ip() -> str | None:
-    """The IP other devices on this network reach us at (default route)."""
+    """The IP other devices on this network reach us at.
+
+    Prefers real broadcast LAN interfaces (Wi-Fi/Ethernet, en0...) over VPN
+    tunnels — with a VPN up, the default route points into the tunnel and
+    that address is unreachable from the phone."""
     try:
-        # a UDP "connection" (no packets sent) reveals the local address
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True,
+                             timeout=5).stdout
+        current = None
+        candidates: dict[str, str] = {}  # interface -> ip
+        for line in out.splitlines():
+            if line and not line[0].isspace():
+                current = line.split(":")[0]
+            m = re.search(r"\binet (\d+\.\d+\.\d+\.\d+).*broadcast", line)
+            if (m and current and not m.group(1).startswith("127.")
+                    and not current.startswith(("lo", "utun", "awdl", "llw",
+                                                "bridge", "gif", "stf"))):
+                candidates.setdefault(current, m.group(1))
+        if candidates:
+            return candidates[sorted(candidates)[0]]  # en0 before en1, ...
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        # fallback: default-route trick (may pick a VPN tunnel address)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("192.0.2.1", 80))  # TEST-NET address; nothing is sent
         ip = s.getsockname()[0]
