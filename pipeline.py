@@ -72,6 +72,7 @@ state = {
     "camera_restart": False,  # set True after changing camera size/device
     "camera_on": True,   # the user's switch — the camera never opens while False
     "viewers": 0,        # open /video_feed connections; camera idles at zero
+    "phone_enabled": False,  # iPhone pairing/streaming gate (Settings toggle)
 }
 state_lock = threading.Lock()
 

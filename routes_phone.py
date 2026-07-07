@@ -7,35 +7,77 @@ including numbered auto-capture — behaves exactly like the Mac camera
 without ever stalling it.
 """
 
+import io
 import socket
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 import pipeline as pl
 import routes_faces
-from certs import CA_CERT
+from certs import CA_CERT, primary_lan_ip
 
 router = APIRouter()
 
+HTTP_PORT = 8000
 HTTPS_PORT = 8443
+
+
+def phone_enabled() -> bool:
+    with pl.state_lock:
+        return bool(pl.state.get("phone_enabled"))
+
+
+def _require_enabled():
+    if not phone_enabled():
+        raise HTTPException(
+            403, "iPhone pairing is turned off — enable it in Settings on the Mac")
+
+
+def pair_url() -> str:
+    host = primary_lan_ip() or f"{socket.gethostname().split('.')[0]}.local"
+    return f"http://{host}:{HTTP_PORT}/pair"
 
 
 # ------------------------------- pairing ----------------------------------
 
+@router.get("/api/pair/qr.png")
+def pairing_qr():
+    """QR of the pairing URL — scan it with the iPhone camera."""
+    _require_enabled()
+    import qrcode
+    img = qrcode.make(pair_url(), border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(buf.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/pair/info")
+def pairing_info():
+    return {"enabled": phone_enabled(), "url": pair_url()}
+
+
 @router.get("/ca.crt")
 def ca_certificate():
     """The local CA the iPhone installs + trusts (one time)."""
+    _require_enabled()
     return FileResponse(CA_CERT, media_type="application/x-x509-ca-cert",
                         filename="FaceVision-CA.crt")
 
 
 @router.get("/pair")
 def pair_page():
-    host = f"{socket.gethostname().split('.')[0]}.local"
+    if not phone_enabled():
+        return HTMLResponse(
+            "<body style='background:#0b0c0e;color:#e9ecef;font-family:system-ui;"
+            "padding:40px;text-align:center'><h2>Pairing is off</h2>"
+            "<p>Turn on “iPhone camera” in Settings on the Mac, then scan the QR again.</p></body>",
+            status_code=403)
+    host = primary_lan_ip() or f"{socket.gethostname().split('.')[0]}.local"
     app_url = f"https://{host}:{HTTPS_PORT}/#/phone"
     return HTMLResponse(f"""<!doctype html>
 <html lang="en"><head>
@@ -115,11 +157,18 @@ async def phone_stream(ws: WebSocket):
     The client waits for each reply before sending the next frame, which
     self-adjusts the frame rate to what this Mac can process."""
     await ws.accept()
+    if not phone_enabled():
+        await ws.send_json({"error": "pairing is turned off in Settings"})
+        await ws.close(code=1008)
+        return
     engine = routes_faces.runtime["engine"]
     tracker = pl.FaceTracker(engine=engine)
     try:
         while True:
             jpeg = await ws.receive_bytes()
+            if not phone_enabled():  # toggled off mid-stream
+                await ws.close(code=1008)
+                return
             result = await run_in_threadpool(_analyze, tracker, jpeg)
             await ws.send_json(result)
     except WebSocketDisconnect:

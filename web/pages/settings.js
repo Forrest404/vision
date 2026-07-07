@@ -62,6 +62,20 @@ export async function mount(root) {
           toggle('Show match score', s.overlay.show_score, (v) => push({ overlay: { show_score: v } }))),
 
         el('div', { class: 'card' },
+          el('h2', {}, 'iPhone camera'),
+          toggle('Allow phone pairing & streaming', s.phone?.enabled, async (v) => {
+            clearTimeout(saveTimer); // apply instantly, then draw/hide the QR
+            try {
+              await api.post('/api/settings', { phone: { enabled: v } });
+              renderQR(v);
+            } catch (err) { toast(err.message, 'err'); }
+          }),
+          el('div', { id: 'qrArea', style: 'text-align:center' }),
+          el('p', { class: 'muted', style: 'margin:10px 0 0;font-size:.76rem' },
+            'Scan the code with the iPhone camera, then follow the steps to ' +
+            'install FaceVision as an app. While off, phones cannot connect.')),
+
+        el('div', { class: 'card' },
           el('h2', {}, 'Camera'),
           el('div', { class: 'field' },
             el('label', {}, 'Device'),
@@ -88,6 +102,26 @@ export async function mount(root) {
       )));
 
   loadCameras(s.camera.index ?? 0);
+  renderQR(!!s.phone?.enabled);
+}
+
+async function renderQR(enabled) {
+  const area = document.getElementById('qrArea');
+  if (!area) return;
+  area.innerHTML = '';
+  if (!enabled) return;
+  try {
+    const info = await api.get('/api/pair/info');
+    area.append(
+      el('img', {
+        src: `/api/pair/qr.png?t=${Date.now()}`, alt: 'Pairing QR code',
+        style: 'width:200px;height:200px;border-radius:10px;margin-top:10px;background:#fff;padding:6px',
+      }),
+      el('p', { class: 'muted', style: 'margin:8px 0 0;font-size:.78rem' },
+        'or open ', el('code', {}, info.url), ' on the phone'));
+  } catch (err) {
+    area.append(el('p', { class: 'muted' }, `QR unavailable: ${err.message}`));
+  }
 }
 
 async function loadCameras(currentIndex) {

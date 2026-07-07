@@ -27,19 +27,26 @@ def _run(*args: str):
     subprocess.run(args, check=True, capture_output=True)
 
 
+def primary_lan_ip() -> str | None:
+    """The IP other devices on this network reach us at (default route)."""
+    try:
+        # a UDP "connection" (no packets sent) reveals the local address
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 80))  # TEST-NET address; nothing is sent
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
 def lan_hostnames_and_ips() -> tuple[list[str], list[str]]:
     """(dns_names, ips) this machine is reachable as on the local network."""
     host = socket.gethostname().split(".")[0]
     names = [f"{host}.local", "localhost"]
     ips = {"127.0.0.1"}
-    # a UDP "connection" (no packets sent) reveals the default-route local IP
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("192.0.2.1", 80))  # TEST-NET address; nothing is sent
-        ips.add(s.getsockname()[0])
-        s.close()
-    except OSError:
-        pass
+    if primary := primary_lan_ip():
+        ips.add(primary)
     try:  # every assigned IPv4, e.g. both Wi-Fi and Ethernet
         for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
             ips.add(info[4][0])

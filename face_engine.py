@@ -23,7 +23,7 @@ YUNET_FILE = "face_detection_yunet_2023mar.onnx"
 SFACE_FILE = "face_recognition_sface_2021dec.onnx"
 
 _ZOO = "https://github.com/opencv/opencv_zoo/raw/main/models"
-YUNET_URL = f"{_ZOO}/face_detection_yunet/{YUNET_FILE}"
+YUNET_URL = f"{_ZOO}/face_detection_yunet/{YUNET_FILE}"wwww
 SFACE_URL = f"{_ZOO}/face_recognition_sface/{SFACE_FILE}"
 
 # SFace's documented cosine-similarity threshold: same person if score >= this.

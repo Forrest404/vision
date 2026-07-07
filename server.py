@@ -226,6 +226,7 @@ def main():
     #   HTTP  :8000 — laptop UI + the phone pairing page
     #   HTTPS :8443 — the iPhone app (camera needs a secure origin)
     cert, key, _ca = ensure_certs()
+    routes_phone.HTTP_PORT = args.port
     routes_phone.HTTPS_PORT = args.https_port
     hostname = socket.gethostname().split(".")[0]
     print(f"Laptop UI : http://localhost:{args.port}")

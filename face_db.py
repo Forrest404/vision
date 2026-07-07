@@ -84,6 +84,8 @@ DEFAULT_SETTINGS = {
     # (1000, 2000, ...) that can be renamed later on the People page.
     # Defaults favor CAPTURING over missing someone.
     "auto_enroll": {"enabled": True, "min_score": 0.6, "min_size": 60},
+    # iPhone camera pairing: off until enabled in Settings (shows the QR).
+    "phone": {"enabled": False},
 }
 
 # Earlier builds persisted these stricter auto-capture values as user

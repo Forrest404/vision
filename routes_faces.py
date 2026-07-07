@@ -396,6 +396,7 @@ def apply_settings(settings: dict):
             "overlay": dict(settings["overlay"]),
             "auto_enroll": dict(settings.get("auto_enroll") or {}),
         }
+        pl.state["phone_enabled"] = bool((settings.get("phone") or {}).get("enabled"))
         cam = settings.get("camera") or {}
         new_cam = {
             "width": int(cam.get("width", 1280)),
