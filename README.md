@@ -63,6 +63,32 @@ face models manually and drop them into `models/`:
 Your browser opens http://localhost:8000. First launch may ask for camera
 permission — allow it (on macOS the permission goes to your terminal app).
 
+## Use your iPhone as a camera
+
+FaceVision installs on your iPhone as a real app (PWA) and streams the
+phone camera to your Mac for live recognition — entirely over your own
+Wi-Fi, no internet, nothing leaves the network.
+
+**One-time setup** (phone and Mac on the same Wi-Fi):
+
+1. Start the server on the Mac. It prints a pairing address like
+   `http://your-mac.local:8000/pair` — open that on the iPhone.
+2. Follow the page: download the certificate → install the profile
+   (Settings → Profile Downloaded → Install) → trust it (Settings →
+   General → About → Certificate Trust Settings). This is what lets the
+   phone camera work, since iOS requires HTTPS.
+3. Tap "Open FaceVision", then Share → **Add to Home Screen**.
+
+From then on, tap the icon: fullscreen viewfinder with live name overlays,
+auto-capture of new faces (same numbered system and toggle as the Mac
+camera), a flip-camera button, and a shutter that offers **Identify**
+(nothing stored) or **Add to library** (stored + tap faces to name them).
+
+Notes: the server now listens on your local network (`--local-only`
+restores the old localhost-only behavior). If the Mac's network address
+changes, restart the server (the certificate re-issues itself) and reload
+the app.
+
 ## The face database
 
 Everything is stored in `data/`:

@@ -26,6 +26,8 @@ from fastapi.staticfiles import StaticFiles
 import face_db as fdb
 import pipeline as pl
 import routes_faces
+import routes_phone
+from certs import ensure_certs
 from face_engine import FaceEngine, ensure_models
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -54,10 +56,22 @@ async def index():
     return FileResponse(WEB_DIR / "index.html")
 
 
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(WEB_DIR / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    # served from the root so its scope covers the whole app
+    return FileResponse(WEB_DIR / "sw.js", media_type="text/javascript")
+
+
 fdb.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 app.mount("/media", StaticFiles(directory=fdb.MEDIA_DIR), name="media")
 app.include_router(routes_faces.router)
+app.include_router(routes_phone.router)
 
 
 # ------------------------------- streaming --------------------------------
@@ -183,13 +197,18 @@ def init_face_stack():
 
 
 def main():
+    import socket
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=os.environ.get("SEG_SOURCE") or None,
                         help="video or image file to stream instead of the camera")
     parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--https-port", type=int, default=routes_phone.HTTPS_PORT)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--local-only", action="store_true",
+                        help="bind 127.0.0.1 only (no phone access)")
     args = parser.parse_args()
 
     print(f"Inference device: {pl.device}")
@@ -197,7 +216,27 @@ def main():
     pl.start(args.source)
     if not args.no_browser:
         threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{args.port}")).start()
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+
+    host = "127.0.0.1" if args.local_only else "0.0.0.0"
+    if args.local_only:
+        uvicorn.run(app, host=host, port=args.port, log_level="warning")
+        return
+
+    # Two listeners over the same app (shared state, one process):
+    #   HTTP  :8000 — laptop UI + the phone pairing page
+    #   HTTPS :8443 — the iPhone app (camera needs a secure origin)
+    cert, key, _ca = ensure_certs()
+    routes_phone.HTTPS_PORT = args.https_port
+    hostname = socket.gethostname().split(".")[0]
+    print(f"Laptop UI : http://localhost:{args.port}")
+    print(f"iPhone    : open http://{hostname}.local:{args.port}/pair "
+          f"on the phone to set up (same Wi-Fi)")
+
+    http_server = uvicorn.Server(uvicorn.Config(
+        app, host=host, port=args.port, log_level="warning"))
+    threading.Thread(target=http_server.run, daemon=True).start()
+    uvicorn.run(app, host=host, port=args.https_port, log_level="warning",
+                ssl_certfile=str(cert), ssl_keyfile=str(key))
 
 
 if __name__ == "__main__":

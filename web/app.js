@@ -8,6 +8,7 @@ import * as search from '/static/pages/search.js';
 import * as people from '/static/pages/people.js';
 import * as objects from '/static/pages/objects.js';
 import * as settings from '/static/pages/settings.js';
+import * as phone from '/static/pages/phone.js';
 
 /* -------------------------------- helpers ------------------------------- */
 
@@ -154,6 +155,7 @@ const routes = [
   { match: /^#\/people\/(\d+)$/, page: people, id: 'people' },
   { match: /^#\/objects$/, page: objects, id: 'objects' },
   { match: /^#\/settings$/, page: settings, id: 'settings' },
+  { match: /^#\/phone$/, page: phone, id: 'phone' },
 ];
 
 let current = null;
@@ -205,5 +207,14 @@ pollStatus();
 
 /* ---------------------------------- init -------------------------------- */
 
-if (!location.hash) location.hash = '#/live';
+// phones land on the camera app; desktops on the Mac live view
+if (!location.hash) {
+  const phoney = matchMedia('(display-mode: standalone)').matches ||
+    /iPhone|iPad|Android/i.test(navigator.userAgent);
+  location.hash = phoney ? '#/phone' : '#/live';
+}
 route();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* http context */ });
+}

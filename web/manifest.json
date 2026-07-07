@@ -1,0 +1,14 @@
+{
+  "name": "FaceVision",
+  "short_name": "FaceVision",
+  "description": "Offline face recognition — your iPhone as a roaming camera for your Mac",
+  "start_url": "/#/phone",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0c0e",
+  "theme_color": "#0b0c0e",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

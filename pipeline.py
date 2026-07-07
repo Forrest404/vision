@@ -20,6 +20,7 @@ import numpy as np
 from pathlib import Path
 
 from app import FASTSAM_MODEL, ModelBank, open_camera, pick_device
+import web_search
 
 YOLO_SIZES = {"n": "yolo11n-seg.pt", "s": "yolo11s-seg.pt", "m": "yolo11m-seg.pt"}
 
@@ -230,7 +231,10 @@ class FaceTracker:
     ENROLL_MIN_AGE = 4
     ENROLL_CONSISTENCY = 0.5  # cosine between the two confirmation samples
 
-    def __init__(self):
+    def __init__(self, engine=None):
+        # engine override lets phone streams use the upload engine so they
+        # never contend with the Mac-camera pipeline's private engine
+        self._engine = engine
         self._tracks: list[dict] = []
         self._next_id = 1
 
@@ -246,7 +250,8 @@ class FaceTracker:
 
     def update(self, dets: np.ndarray, frame: np.ndarray, face_cfg: dict) -> list[dict]:
         """dets: YuNet (N, 15) rows. Returns live tracks with display names."""
-        engine, index = face_runtime["engine"], face_runtime["index"]
+        engine = self._engine or face_runtime["engine"]
+        index = face_runtime["index"]
         threshold = float(face_cfg.get("rec_threshold", 0.363))
         auto = face_cfg.get("auto_enroll") or {}
 
@@ -293,6 +298,7 @@ class FaceTracker:
             track = {
                 "id": self._next_id, "bbox": list(row[:4]), "row": row,
                 "misses": 0, "age": 1, "frames_since_embed": 0, "votes": [],
+                "web_name": None, "web_queued": False,
             }
             self._next_id += 1
             self._embed_and_vote(track, frame, engine, index, threshold, auto)
@@ -323,8 +329,19 @@ class FaceTracker:
             return
         hit = index.match(emb, threshold)
         if hit is None and auto.get("enabled") and not track.get("enrolled"):
-            # a clear stranger: save them as the next numbered person
             hit = self._auto_enroll(track, frame, emb, auto, threshold)
+        if hit is None and not track.get("web_queued") and track["age"] >= web_search.WEB_SEARCH_MIN_AGE:
+            # face isn't in the local DB — try the internet as a fallback
+            x, y, w, h = (int(v) for v in track["bbox"])
+            pad = int(min(w, h) * 0.25)
+            fh, fw = frame.shape[:2]
+            crop = frame[max(0, y - pad):min(fh, y + h + pad),
+                         max(0, x - pad):min(fw, x + w + pad)]
+            ok, jpg = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ok:
+                def _cb(name, t=track):
+                    t["web_name"] = name
+                track["web_queued"] = web_search.lookup(emb.tobytes(), jpg.tobytes(), _cb)
         track["votes"].append(hit)  # None counts as an "Unknown" vote
         if len(track["votes"]) > self.VOTE_SLOTS:
             track["votes"].pop(0)
@@ -404,6 +421,9 @@ class FaceTracker:
         self._tracks.clear()
 
 
+WEB_COLOR = hex_to_bgr("#f59e0b")  # amber — visually distinct from known/unknown
+
+
 def draw_faces(frame: np.ndarray, tracks: list[dict], face_cfg: dict) -> int:
     overlay = face_cfg.get("overlay", {})
     known_color = hex_to_bgr(overlay.get("box_color", "#38bdf8"))
@@ -416,7 +436,18 @@ def draw_faces(frame: np.ndarray, tracks: list[dict], face_cfg: dict) -> int:
     for track in tracks:
         x, y, w, h = (int(v) for v in track["bbox"])
         known = track["name"] is not None
-        color = known_color if known else unknown_color
+        web_name = track.get("web_name")
+
+        if known:
+            color = known_color
+            label = f"{track['name']} {track['score']:.2f}" if show_score else track["name"]
+        elif web_name:
+            color = WEB_COLOR
+            label = f"? {web_name}"
+        else:
+            color = unknown_color
+            label = "Unknown"
+
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, thickness)
 
         if show_landmarks:
@@ -425,9 +456,6 @@ def draw_faces(frame: np.ndarray, tracks: list[dict], face_cfg: dict) -> int:
                 cx, cy = int(row[4 + i * 2]), int(row[5 + i * 2])
                 cv2.circle(frame, (cx, cy), 2, color, -1)
 
-        label = track["name"] if known else "Unknown"
-        if known and show_score:
-            label = f"{label} {track['score']:.2f}"
         (tw, th), _ = cv2.getTextSize(label, FONT, label_scale, 2)
         ty = max(y, th + 8)
         cv2.rectangle(frame, (x, ty - th - 8), (x + tw + 6, ty), color, -1)
