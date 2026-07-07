@@ -82,7 +82,7 @@ device = pick_device()
 bank = ModelBank(device)
 
 # Set by server startup (needs face models + DB); None until then.
-face_runtime = {"engine": None, "index": None}
+face_runtime = {"engine": None, "index": None, "db": None}
 
 
 def current_state() -> dict:
@@ -185,6 +185,19 @@ def hex_to_bgr(value: str, fallback=(248, 189, 56)) -> tuple:
         return fallback
 
 
+def face_is_sharp(frame: np.ndarray, row, blur_threshold: float = 60.0) -> bool:
+    """Variance-of-Laplacian focus check on the face region — rejects
+    motion blur / out-of-focus frames so junk never enters the database."""
+    x, y, w, h = (int(v) for v in row[:4])
+    ih, iw = frame.shape[:2]
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(iw, x + w), min(ih, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return False
+    gray = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var() >= blur_threshold
+
+
 class FaceTracker:
     """IoU tracker so we embed each on-screen face rarely, not every frame.
 
@@ -215,9 +228,11 @@ class FaceTracker:
         union = aw * ah + bw * bh - inter
         return inter / union if union > 0 else 0.0
 
-    def update(self, dets: np.ndarray, frame: np.ndarray, threshold: float) -> list[dict]:
+    def update(self, dets: np.ndarray, frame: np.ndarray, face_cfg: dict) -> list[dict]:
         """dets: YuNet (N, 15) rows. Returns live tracks with display names."""
         engine, index = face_runtime["engine"], face_runtime["index"]
+        threshold = float(face_cfg.get("rec_threshold", 0.363))
+        auto = face_cfg.get("auto_enroll") or {}
 
         # Greedy IoU association: best-overlap pairs first.
         pairs = []
@@ -246,7 +261,7 @@ class FaceTracker:
             interval = (self.EMBED_INTERVAL if any(track["votes"])
                         else self.EMBED_INTERVAL_UNKNOWN)
             if track["frames_since_embed"] >= interval:
-                self._embed_and_vote(track, frame, engine, index, threshold)
+                self._embed_and_vote(track, frame, engine, index, threshold, auto)
 
         # 2. unmatched tracks: age them out after MAX_MISSES frames
         for t, track in enumerate(self._tracks):
@@ -263,7 +278,7 @@ class FaceTracker:
                 "misses": 0, "frames_since_embed": 0, "votes": [],
             }
             self._next_id += 1
-            self._embed_and_vote(track, frame, engine, index, threshold)
+            self._embed_and_vote(track, frame, engine, index, threshold, auto)
             self._tracks.append(track)
 
         # visible tracks = seen this frame
@@ -280,7 +295,8 @@ class FaceTracker:
                 out.append({**track, "person_id": pid, "name": name, "score": score})
         return out
 
-    def _embed_and_vote(self, track: dict, frame: np.ndarray, engine, index, threshold: float):
+    def _embed_and_vote(self, track: dict, frame: np.ndarray, engine, index,
+                        threshold: float, auto: dict):
         track["frames_since_embed"] = 0
         if engine is None or index is None:
             return
@@ -289,9 +305,50 @@ class FaceTracker:
         except cv2.error:
             return
         hit = index.match(emb, threshold)
+        if hit is None and auto.get("enabled") and not track.get("enrolled"):
+            # a clear stranger: save them as the next numbered person
+            hit = self._auto_enroll(track, frame, emb, auto)
         track["votes"].append(hit)  # None counts as an "Unknown" vote
         if len(track["votes"]) > self.VOTE_SLOTS:
             track["votes"].pop(0)
+
+    def _auto_enroll(self, track: dict, frame: np.ndarray,
+                     emb: np.ndarray, auto: dict):
+        """Store a clear unknown face as person 1000/2000/... Returns the
+        vote tuple for the new identity, or None if quality gates fail
+        (they retry on the next scheduled embed)."""
+        db = face_runtime["db"]
+        row = track["row"]
+        if db is None:
+            return None
+        if float(row[14]) < float(auto.get("min_score", 0.8)):
+            return None
+        if min(float(row[2]), float(row[3])) < float(auto.get("min_size", 80)):
+            return None
+        if not face_is_sharp(frame, row):
+            return None
+
+        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            return None
+        # sha256 dedupe reuses the photo when two strangers share one frame
+        photo, _bgr, _dup = db.add_photo(
+            jpg.tobytes(), f"Auto capture {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        if photo is None:
+            return None
+        landmarks = [[float(row[4 + i * 2]), float(row[5 + i * 2])] for i in range(5)]
+        face_id = db.add_face(
+            photo["id"], tuple(float(v) for v in row[:4]),
+            landmarks, float(row[14]), emb, image=frame,
+        )
+        name = db.next_auto_name()
+        face = db.label_face(face_id, name=name)
+        db.index.rebuild()  # next sighting matches this number instead of minting a new one
+        track["enrolled"] = True
+        if not face or face.get("person_id") is None:
+            return None
+        return (face["person_id"], name, 1.0)
 
     def reset(self):
         self._tracks.clear()
@@ -401,8 +458,7 @@ def pipeline(source):
                 time.sleep(0.25)  # don't spin while the one-time download runs
                 continue
             dets = engine.detect(frame)
-            threshold = float(cfg["face"].get("rec_threshold", 0.363))
-            tracks = tracker.update(dets, frame, threshold)
+            tracks = tracker.update(dets, frame, cfg["face"])
             count = draw_faces(frame, tracks, cfg["face"])
             name = "yunet+sface"
         else:

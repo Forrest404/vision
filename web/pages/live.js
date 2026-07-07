@@ -46,6 +46,13 @@ export async function mount(root) {
           'Lower = more matches (riskier). Default 0.36.')),
 
       el('div', { class: 'card' },
+        el('h2', {}, 'Auto-capture'),
+        toggle('Save new faces automatically', settings?.auto_enroll?.enabled, (v) => pushSettings({ auto_enroll: { enabled: v } })),
+        el('p', { class: 'muted', style: 'margin:6px 0 0' },
+          'Clear unknown faces are saved as 1000, 2000, … — rename them in ',
+          el('a', { class: 'plain', href: '#/people' }, 'People'), '.')),
+
+      el('div', { class: 'card' },
         el('h2', {}, 'Overlay'),
         toggle('Show landmarks', settings?.overlay?.show_landmarks, (v) => pushSettings({ overlay: { show_landmarks: v } })),
         toggle('Show match score', settings?.overlay?.show_score, (v) => pushSettings({ overlay: { show_score: v } })),

@@ -80,6 +80,9 @@ DEFAULT_SETTINGS = {
         "box_thickness": 2,
     },
     "camera": {"width": 1280, "height": 720, "index": 0},
+    # Live feed auto-captures clear unknown faces as numbered people
+    # (1000, 2000, ...) that can be renamed later on the People page.
+    "auto_enroll": {"enabled": True, "min_score": 0.8, "min_size": 80},
 }
 
 
@@ -382,6 +385,11 @@ class FaceDB:
         ]
 
     # ------------------------------- persons ------------------------------
+
+    def next_auto_name(self) -> str:
+        """Next numeric identity for auto-captured faces: 1000, 2000, ..."""
+        numbers = [int(n) for n in self.person_names().values() if n.isdigit()]
+        return str(max(numbers) + 1000 if numbers else 1000)
 
     def find_or_create_person(self, name: str) -> int:
         name = name.strip()

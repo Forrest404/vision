@@ -47,7 +47,9 @@ async function peopleList(root) {
             ? el('img', { class: 'avatar', src: p.cover_url, alt: p.name })
             : el('div', { class: 'avatar placeholder' }, p.name[0]?.toUpperCase() || '?'),
           el('div', { class: 'pname' }, p.name),
-          el('div', { class: 'pmeta' }, `${p.face_count} faces · ${p.photo_count} photos`)));
+          el('div', { class: 'pmeta' }, /^\d+$/.test(p.name)
+            ? 'auto-captured · open to rename'
+            : `${p.face_count} faces · ${p.photo_count} photos`)));
       }
     }, q ? 200 : 0);
   }

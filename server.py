@@ -147,6 +147,7 @@ def init_face_stack():
     first-run download (or a broken network) never blocks server startup."""
     db = fdb.FaceDB()
     routes_faces.runtime["db"] = db
+    pl.face_runtime["db"] = db  # auto-capture writes through this
     routes_faces.apply_settings(db.get_settings())
 
     def load():

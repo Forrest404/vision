@@ -388,6 +388,7 @@ def apply_settings(settings: dict):
         pl.state["face"] = {
             "rec_threshold": settings["rec_threshold"],
             "overlay": dict(settings["overlay"]),
+            "auto_enroll": dict(settings.get("auto_enroll") or {}),
         }
         cam = settings.get("camera") or {}
         new_cam = {
