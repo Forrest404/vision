@@ -349,7 +349,7 @@ class FaceTracker:
 
     def _auto_enroll(self, track: dict, frame: np.ndarray,
                      emb: np.ndarray, auto: dict, threshold: float):
-        """Store a clear unknown face as person 1000/2000/... Returns the
+        """Store a clear unknown face as person 0001/0002/... Returns the
         vote tuple for the new identity, or None if quality gates fail
         (they retry on the next scheduled embed).
 

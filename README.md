@@ -8,7 +8,7 @@ in this folder.
 - **Live** — camera feed with a name next to every face it knows
   ("Unknown" otherwise), powered by OpenCV YuNet + SFace
 - **Auto-capture** — clear unknown faces on the live feed are saved
-  automatically as numbered people (1000, 2000, …) with a snapshot;
+  automatically as numbered people (0001, 0002, …) with a snapshot;
   rename them on the People page (toggle in Live/Settings)
 - **Enroll** — drag-drop photos (batch supported), click each detected
   face, type a name; the face joins your on-device database

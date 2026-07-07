@@ -60,7 +60,7 @@ export async function mount(root) {
         el('h2', {}, 'Auto-capture'),
         toggle('Save new faces automatically', settings?.auto_enroll?.enabled, (v) => pushSettings({ auto_enroll: { enabled: v } })),
         el('p', { class: 'muted', style: 'margin:6px 0 0' },
-          'Clear unknown faces are saved as 1000, 2000, … — rename them in ',
+          'Clear unknown faces are saved as 0001, 0002, … — rename them in ',
           el('a', { class: 'plain', href: '#/people' }, 'People'), '.')),
 
       el('div', { class: 'card' },

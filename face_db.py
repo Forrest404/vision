@@ -81,7 +81,7 @@ DEFAULT_SETTINGS = {
     },
     "camera": {"width": 1280, "height": 720, "index": 0},
     # Live feed auto-captures clear unknown faces as numbered people
-    # (1000, 2000, ...) that can be renamed later on the People page.
+    # (0001, 0002, ...) that can be renamed later on the People page.
     # Defaults favor CAPTURING over missing someone.
     "auto_enroll": {"enabled": True, "min_score": 0.6, "min_size": 60},
     # iPhone camera pairing: off until enabled in Settings (shows the QR).
@@ -189,6 +189,7 @@ class FaceDB:
             )
             self._conn.commit()
         self._migrate_settings()
+        self._migrate_numbering()
         self.index = EmbeddingIndex(self)
 
     def _migrate_settings(self):
@@ -199,6 +200,29 @@ class FaceDB:
             if row and json.loads(row["value"]) == _STALE_AUTO_ENROLL:
                 self._conn.execute("DELETE FROM settings WHERE key='auto_enroll'")
                 self._conn.commit()
+
+    def _migrate_numbering(self):
+        """One-time: renumber old-scheme auto-captured people (1000, 2000, ...)
+        to the sequential scheme (0001, 0002, ...). Typed names are untouched."""
+        with self._lock:
+            rows = self._conn.execute("SELECT id, name FROM persons").fetchall()
+            digit_persons = [(r["id"], int(r["name"]))
+                             for r in rows if r["name"].isdigit()]
+            old = sorted(((pid, n) for pid, n in digit_persons
+                          if n >= 1000 and n % 1000 == 0), key=lambda t: t[1])
+            if not old:
+                return
+            taken = {n for pid, n in digit_persons if (pid, n) not in old}
+            next_n = max(taken, default=0) + 1
+            for pid, _ in old:
+                while next_n in taken:
+                    next_n += 1
+                self._conn.execute(
+                    "UPDATE persons SET name=? WHERE id=?", (f"{next_n:04d}", pid))
+                taken.add(next_n)
+                next_n += 1
+            self._conn.commit()
+            print(f"Renumbered {len(old)} auto-captured people to 0001-style names.")
 
     # ------------------------------- photos -------------------------------
 
@@ -411,9 +435,9 @@ class FaceDB:
     # ------------------------------- persons ------------------------------
 
     def next_auto_name(self) -> str:
-        """Next numeric identity for auto-captured faces: 1000, 2000, ..."""
+        """Next numeric identity for auto-captured faces: 0001, 0002, ..."""
         numbers = [int(n) for n in self.person_names().values() if n.isdigit()]
-        return str(max(numbers) + 1000 if numbers else 1000)
+        return f"{max(numbers, default=0) + 1:04d}"
 
     def find_or_create_person(self, name: str) -> int:
         name = name.strip()

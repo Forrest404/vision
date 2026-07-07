@@ -42,7 +42,7 @@ export async function mount(root) {
           toggle('Save new faces from the live feed', s.auto_enroll?.enabled,
             (v) => push({ auto_enroll: { enabled: v } })),
           el('p', { class: 'muted', style: 'margin:0 0 12px;font-size:.76rem' },
-            'Clear unknown faces are stored as numbered people (1000, 2000, …) with a snapshot. Rename them on the People page.'),
+            'Clear unknown faces are stored as numbered people (0001, 0002, …) with a snapshot. Rename them on the People page.'),
           slider('Capture quality', s.auto_enroll?.min_score ?? 0.6, 0.3, 0.95, 0.01,
             (v) => push({ auto_enroll: { min_score: v } }),
             'How confident the detector must be before a stranger is saved. Lower captures more (a few soft shots included); higher = fewer but cleaner.'),
