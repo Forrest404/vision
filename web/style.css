@@ -578,44 +578,6 @@ input[type="range"]::-moz-range-thumb {
 .toast.err { border-left-color: var(--red); }
 @keyframes slidein { from { transform: translateX(20px); opacity: 0; } }
 
-/* ---------------------------- auth / login ----------------------------- */
-
-/* hide the whole nav while logged out or on the login screen */
-body.auth-gate #navrail { display: none; }
-body:not(.logged-in) #navrail { display: none; }
-body.auth-gate #page, body:not(.logged-in) #page { padding: 0; }
-
-.login-wrap {
-  min-height: 100vh;
-  display: flex; align-items: center; justify-content: center;
-  padding: 20px;
-}
-.login-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 30px;
-  width: min(380px, 92vw);
-  box-shadow: var(--shadow);
-}
-.login-brand {
-  display: flex; align-items: center; gap: 10px;
-  color: var(--accent); font-size: 1.3rem; font-weight: 700;
-  margin-bottom: 6px;
-}
-.login-brand span { color: var(--text); }
-
-#navUserRow {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 12px 8px; font-size: .74rem; color: var(--text-faint);
-}
-#navUser { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-#signOutBtn {
-  padding: 4px 8px; font-size: .9rem; line-height: 1;
-  background: transparent; border: 1px solid var(--border);
-}
-body.phone-mode #navUserRow { display: none; }
-
 /* ------------------------------- tables -------------------------------- */
 
 .section-h {

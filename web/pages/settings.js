@@ -81,13 +81,6 @@ export async function mount(root) {
           toggle('Show match score', s.overlay.show_score, (v) => push({ overlay: { show_score: v } }))),
 
         el('div', { class: 'card' },
-          el('h2', {}, 'My account'),
-          passwordForm(),
-          el('p', { class: 'muted', style: 'margin:8px 0 0;font-size:.76rem' },
-            'Manage all accounts on the ', el('a', { class: 'plain', href: '#/users' }, 'Users'),
-            ' page (admins only).')),
-
-        el('div', { class: 'card' },
           el('h2', {}, 'iPhone camera'),
           toggle('Allow phone pairing & streaming', s.phone?.enabled, async (v) => {
             clearTimeout(saveTimer); // apply instantly, then draw/hide the QR
@@ -215,20 +208,6 @@ function colorRow(label, value, onChange) {
   return el('div', { class: 'field' },
     el('div', { class: 'row', style: 'justify-content:space-between' },
       el('label', {}, label), input));
-}
-
-function passwordForm() {
-  const cur = el('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
-  const nw = el('input', { type: 'password', placeholder: 'New password (min 8)', autocomplete: 'new-password' });
-  const btn = el('button', { class: 'primary', onclick: async () => {
-    btn.disabled = true;
-    try {
-      await api.post('/api/password', { current: cur.value, new: nw.value });
-      toast('Password changed', 'ok'); cur.value = ''; nw.value = '';
-    } catch (err) { toast(err.message, 'err'); }
-    btn.disabled = false;
-  } }, 'Change password');
-  return el('div', { class: 'field', style: 'gap:10px' }, cur, nw, btn);
 }
 
 function ackRow(initial) {

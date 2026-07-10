@@ -16,7 +16,6 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 import audit
-import auth
 import face_db as fdb
 import pipeline as pl
 
@@ -80,7 +79,6 @@ def _face_json(face: dict) -> dict:
 @router.post("/photos")
 def upload_photos(request: Request, files: list[UploadFile] = File(...)):
     """Batch enroll: store photos, detect + embed faces, suggest matches."""
-    auth.require(request, "operator")
     db, engine = _db(), _engine()
     audit.log(request, "upload_photos", detail=f"{len(files)} file(s)")
     if len(files) > MAX_FILES:
@@ -188,7 +186,6 @@ class LabelBody(BaseModel):
 @router.post("/faces/label")
 def label_faces(request: Request, body: LabelBody):
     """Batch face naming; one index rebuild at the end."""
-    auth.require(request, "operator")
     db = _db()
     audit.log(request, "label_faces", detail=f"{len(body.labels)} face(s)")
     updated = []
@@ -203,7 +200,6 @@ def label_faces(request: Request, body: LabelBody):
 
 @router.delete("/faces/{face_id}")
 def delete_face(request: Request, face_id: int):
-    auth.require(request, "operator")
     audit.log(request, "delete_face", str(face_id))
     if not _db().delete_face(face_id):
         raise HTTPException(404, "face not found")
@@ -268,7 +264,6 @@ def get_person(person_id: int):
 
 @router.patch("/persons/{person_id}")
 def rename_person(request: Request, person_id: int, body: RenameBody):
-    auth.require(request, "operator")
     if not body.name.strip():
         raise HTTPException(400, "name required")
     if not _db().rename_person(person_id, body.name):
@@ -280,7 +275,6 @@ def rename_person(request: Request, person_id: int, body: RenameBody):
 @router.post("/persons/{person_id}/category")
 def set_category(request: Request, person_id: int, body: CategoryBody):
     """Assign a person to a watchlist category (watch/staff/vip/none)."""
-    auth.require(request, "operator")
     if not _db().set_category(person_id, body.category):
         raise HTTPException(400, "invalid category or person not found")
     audit.log(request, "set_category", str(person_id), body.category)
@@ -289,7 +283,6 @@ def set_category(request: Request, person_id: int, body: CategoryBody):
 
 @router.post("/persons/{person_id}/merge")
 def merge_person(request: Request, person_id: int, body: MergeBody):
-    auth.require(request, "operator")
     if not _db().merge_person(person_id, body.target_id):
         raise HTTPException(400, "merge failed (person missing or same id)")
     audit.log(request, "merge_person", str(person_id), f"into {body.target_id}")
@@ -298,7 +291,6 @@ def merge_person(request: Request, person_id: int, body: MergeBody):
 
 @router.delete("/persons/{person_id}")
 def delete_person(request: Request, person_id: int):
-    auth.require(request, "operator")
     if not _db().delete_person(person_id):
         raise HTTPException(404, "person not found")
     audit.log(request, "delete_person", str(person_id))
@@ -334,7 +326,6 @@ def get_photo(photo_id: int):
 
 @router.delete("/photos/{photo_id}")
 def delete_photo(request: Request, photo_id: int):
-    auth.require(request, "operator")
     if not _db().delete_photo(photo_id):
         raise HTTPException(404, "photo not found")
     audit.log(request, "delete_photo", str(photo_id))
@@ -410,7 +401,6 @@ def search_face(file: UploadFile = File(...), face_index: int | None = Form(None
 @router.delete("/library")
 def clear_library(request: Request):
     """Delete every person, photo and face from the on-device database."""
-    auth.require(request, "admin")
     audit.log(request, "clear_library")
     return {"ok": True, "deleted": _db().clear_all()}
 
@@ -423,7 +413,6 @@ def library_stats():
 @router.get("/library/export")
 def export_library(request: Request):
     """Download the whole library (database + photos) as one zip backup."""
-    auth.require(request, "admin")
     audit.log(request, "export_library")
     import tempfile
     import zipfile
@@ -460,7 +449,6 @@ def get_settings():
 @router.post("/settings")
 def set_settings(request: Request, partial: dict):
     """Merge, persist, and push into the live pipeline immediately."""
-    auth.require(request, "admin")
     merged = _db().set_settings(partial)
     apply_settings(merged)
     audit.log(request, "settings_change", detail=",".join(partial.keys()))

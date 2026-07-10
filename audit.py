@@ -1,12 +1,11 @@
-"""Audit-trail helper: record every privacy-relevant action.
-
-Every mutating request should call log(request, action, ...) so a store can
-prove who did what and when — a baseline requirement for biometric systems.
+"""Lightweight action log: record privacy-relevant actions (enrol, delete,
+erase, export, settings changes) with a timestamp and client IP. There are no
+user accounts, so entries are anonymous — the log is still useful as a record
+of what changed and when.
 """
 
 from fastapi import Request
 
-import auth
 import routes_faces
 
 
@@ -21,6 +20,4 @@ def log(request: Request, action: str, target: str = "", detail: str = ""):
     db = routes_faces.runtime.get("db")
     if db is None:
         return
-    user = auth.current_user(request)
-    db.add_audit(user["username"] if user else None,
-                 action, target, detail, client_ip(request))
+    db.add_audit(None, action, target, detail, client_ip(request))
