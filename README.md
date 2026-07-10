@@ -102,6 +102,19 @@ Everything is stored in `data/`:
 
 Delete `data/` to wipe the library. Back it up by copying the folder.
 
+**Automatic backups.** Every time the server starts it snapshots the whole
+library (database + all images) to `data/backups/backup-<timestamp>.zip` and
+keeps the last 8. So your enrolled faces from one session always carry into
+the next, and a bad delete can be undone. To roll back:
+
+```bash
+.venv/bin/python backup.py restore data/backups/backup-20260710-083751.zip
+```
+
+Nothing is ever auto-deleted unless you turn on **Retention** in Settings
+(off by default) — and even then it only removes *unmatched* detections, never
+a photo tied to a named or numbered person.
+
 **Recognition quality tips**
 
 - Enroll 3–5 photos per person (different angles/lighting) for reliable

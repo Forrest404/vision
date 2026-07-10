@@ -1,5 +1,5 @@
 // Gallery: browse every photo in the library, newest first, with paging.
-import { $, el, api, toast, confirmModal, lightbox } from '/static/app.js?v=2';
+import { $, el, api, toast, confirmModal, lightbox } from '/static/app.js?v=3';
 
 const PAGE_SIZE = 48;
 let page = 1;

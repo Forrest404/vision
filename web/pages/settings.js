@@ -1,6 +1,6 @@
 // Settings: recognition, detection, overlay style, camera. Persisted in the
 // on-device DB and pushed into the live pipeline immediately.
-import { el, api, toast } from '/static/app.js?v=2';
+import { el, api, toast } from '/static/app.js?v=3';
 
 let saveTimer = null;
 
@@ -27,6 +27,25 @@ export async function mount(root) {
       el('span', { class: 'sub' }, 'Stored on this device · applied live')),
     el('div', { class: 'page-body' },
       el('div', { class: 'settings-grid' },
+
+        el('div', { class: 'card', style: 'border-color:var(--accent)' },
+          el('h2', {}, 'Compliance'),
+          toggle('Watchlist mode (retail-safe)', s.watchlist?.enabled,
+            (v) => push({ watchlist: { enabled: v } })),
+          el('p', { class: 'muted', style: 'margin:0 0 12px;font-size:.76rem' },
+            'When ON, the live feed NEVER stores new faces — it only alerts on '
+            + 'people you have added to a watchlist. This is the lawful shape for '
+            + 'monitoring customers. Turning it on disables auto-capture.'),
+          slider('Keep watchlist events (days)', s.retention?.events_days ?? 30, 1, 365, 1,
+            (v) => push({ retention: { events_days: v } })),
+          slider('Keep unmatched captures (days)', s.retention?.unmatched_faces_days ?? 7, 0, 90, 1,
+            (v) => push({ retention: { unmatched_faces_days: v } }),
+            'Non-watchlist auto-captures older than this are auto-deleted. Watchlisted people are always kept.'),
+          ackRow(s.compliance_ack),
+          el('p', { class: 'muted', style: 'margin:10px 0 0;font-size:.72rem' },
+            'Legal note: deploying face recognition on the public requires consent '
+            + 'signage, a privacy/DPIA assessment, and sign-off for your jurisdiction. '
+            + 'This software provides controls, not legal advice.')),
 
         el('div', { class: 'card' },
           el('h2', {}, 'Recognition'),
@@ -60,6 +79,13 @@ export async function mount(root) {
             (v) => push({ overlay: { label_scale: v } })),
           toggle('Show 5-point landmarks', s.overlay.show_landmarks, (v) => push({ overlay: { show_landmarks: v } })),
           toggle('Show match score', s.overlay.show_score, (v) => push({ overlay: { show_score: v } }))),
+
+        el('div', { class: 'card' },
+          el('h2', {}, 'My account'),
+          passwordForm(),
+          el('p', { class: 'muted', style: 'margin:8px 0 0;font-size:.76rem' },
+            'Manage all accounts on the ', el('a', { class: 'plain', href: '#/users' }, 'Users'),
+            ' page (admins only).')),
 
         el('div', { class: 'card' },
           el('h2', {}, 'iPhone camera'),
@@ -189,6 +215,29 @@ function colorRow(label, value, onChange) {
   return el('div', { class: 'field' },
     el('div', { class: 'row', style: 'justify-content:space-between' },
       el('label', {}, label), input));
+}
+
+function passwordForm() {
+  const cur = el('input', { type: 'password', placeholder: 'Current password', autocomplete: 'current-password' });
+  const nw = el('input', { type: 'password', placeholder: 'New password (min 8)', autocomplete: 'new-password' });
+  const btn = el('button', { class: 'primary', onclick: async () => {
+    btn.disabled = true;
+    try {
+      await api.post('/api/password', { current: cur.value, new: nw.value });
+      toast('Password changed', 'ok'); cur.value = ''; nw.value = '';
+    } catch (err) { toast(err.message, 'err'); }
+    btn.disabled = false;
+  } }, 'Change password');
+  return el('div', { class: 'field', style: 'gap:10px' }, cur, nw, btn);
+}
+
+function ackRow(initial) {
+  const input = el('input', { type: 'checkbox' });
+  input.checked = !!initial;
+  input.addEventListener('change', () => push({ compliance_ack: input.checked }));
+  return el('label', { class: 'switch', style: 'margin:6px 0 4px' },
+    input, el('span', { class: 'track' }),
+    'I have consent signage & a privacy assessment in place');
 }
 
 function toggle(label, initial, onChange) {

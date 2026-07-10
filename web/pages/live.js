@@ -1,5 +1,5 @@
 // Live face recognition: MJPEG feed + recognition controls.
-import { $, el, api, status, toast } from '/static/app.js?v=2';
+import { $, el, api, status, toast } from '/static/app.js?v=3';
 
 let statusFn = null;
 let settingsTimer = null;

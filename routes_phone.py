@@ -164,7 +164,7 @@ async def phone_stream(ws: WebSocket):
         await ws.send_json({"error": "pairing is turned off in Settings"})
         await ws.close(code=1008)
         return
-    tracker = pl.FaceTracker(engine=routes_faces.runtime["engine"])
+    tracker = pl.FaceTracker(engine=routes_faces.runtime["engine"], camera="phone")
     try:
         while True:
             jpeg = await ws.receive_bytes()

@@ -10,6 +10,9 @@ import * as gallery from '/static/pages/gallery.js';
 import * as objects from '/static/pages/objects.js';
 import * as settings from '/static/pages/settings.js';
 import * as phone from '/static/pages/phone.js';
+import * as login from '/static/pages/login.js';
+import * as audit from '/static/pages/audit.js';
+import * as users from '/static/pages/users.js';
 
 /* -------------------------------- helpers ------------------------------- */
 
@@ -17,6 +20,11 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 
 // cross-page handoff (e.g. Identify -> "Add to library" -> Enroll)
 export const handoff = {};
+
+// current session; populated from /api/me at startup and after login
+export const session = { user: null, role: null };
+const RANK = { viewer: 0, operator: 1, admin: 2 };
+export const hasRole = (r) => (RANK[session.role] ?? -1) >= RANK[r];
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -41,6 +49,12 @@ export function toast(msg, type = '') {
 }
 
 async function handle(resp) {
+  if (resp.status === 401) {
+    // session expired or missing — bounce to login
+    session.user = null; session.role = null;
+    if (location.hash !== '#/login') location.hash = '#/login';
+    throw new Error('authentication required');
+  }
   if (!resp.ok) {
     let detail = resp.statusText;
     try { detail = (await resp.json()).detail || detail; } catch { /* not json */ }
@@ -166,6 +180,9 @@ const routes = [
   { match: /^#\/objects$/, page: objects, id: 'objects' },
   { match: /^#\/settings$/, page: settings, id: 'settings' },
   { match: /^#\/phone$/, page: phone, id: 'phone' },
+  { match: /^#\/login$/, page: login, id: 'login' },
+  { match: /^#\/audit$/, page: audit, id: 'audit' },
+  { match: /^#\/users$/, page: users, id: 'users' },
 ];
 
 let current = null;
@@ -200,31 +217,70 @@ window.addEventListener('hashchange', route);
 export const status = { state: null, faceReady: false, listeners: new Set() };
 
 async function pollStatus() {
+  if (!session.role) return; // not logged in
   try {
     const st = await api.get('/stats');
     status.state = st;
     const dot = $('#statusDot'), txt = $('#statusText');
+    if (!dot) return;
     if (st.error) { dot.className = 'warn'; txt.textContent = st.error; }
     else { dot.className = 'ok'; txt.textContent = `${st.device} · ${st.fps.toFixed(0)} fps`; }
     status.listeners.forEach((fn) => { try { fn(st); } catch { /* listener */ } });
   } catch {
-    $('#statusDot').className = '';
-    $('#statusText').textContent = 'offline';
+    if ($('#statusDot')) { $('#statusDot').className = ''; $('#statusText').textContent = 'offline'; }
   }
 }
 
 setInterval(pollStatus, 1000);
-pollStatus();
+
+/* ------------------------------- session -------------------------------- */
+
+// Show/hide nav items by role; add a sign-out control once.
+function applyRoleUI() {
+  document.body.classList.toggle('logged-in', !!session.role);
+  document.querySelectorAll('.navlink[data-min-role]').forEach((a) => {
+    a.style.display = hasRole(a.dataset.minRole) ? '' : 'none';
+  });
+  const who = $('#navUser');
+  if (who) who.textContent = session.user ? `${session.user} · ${session.role}` : '';
+}
+
+export function afterLogin(me) {
+  session.user = me.username; session.role = me.role;
+  applyRoleUI();
+  pollStatus();
+  location.hash = me.must_change ? '#/settings' : '#/live';
+  if (me.must_change) toast('Please change your password in Settings', 'err');
+}
+
+export async function signOut() {
+  try { await api.post('/api/logout', {}); } catch { /* ignore */ }
+  session.user = null; session.role = null;
+  applyRoleUI();
+  location.hash = '#/login';
+  route();
+}
 
 /* ---------------------------------- init -------------------------------- */
 
-// phones land on the camera app; desktops on the Mac live view
-if (!location.hash) {
-  const phoney = matchMedia('(display-mode: standalone)').matches ||
-    /iPhone|iPad|Android/i.test(navigator.userAgent);
-  location.hash = phoney ? '#/phone' : '#/live';
+async function boot() {
+  $('#signOutBtn')?.addEventListener('click', signOut);
+  let me = { authenticated: false };
+  try { me = await api.get('/api/me'); } catch { /* offline */ }
+  if (me.authenticated) { session.user = me.username; session.role = me.role; }
+  applyRoleUI();
+
+  if (!session.role) {
+    location.hash = '#/login';
+  } else if (!location.hash || location.hash === '#/login') {
+    const phoney = matchMedia('(display-mode: standalone)').matches ||
+      /iPhone|iPad|Android/i.test(navigator.userAgent);
+    location.hash = phoney ? '#/phone' : '#/live';
+  }
+  route();
 }
-route();
+
+boot();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => { /* http context */ });

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS persons (
   id            INTEGER PRIMARY KEY,
   name          TEXT NOT NULL COLLATE NOCASE,
   cover_face_id INTEGER,
+  category      TEXT DEFAULT 'none',
   created_at    TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS photos (
@@ -65,6 +66,39 @@ CREATE TABLE IF NOT EXISTS faces (
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_faces_photo  ON faces(photo_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+
+-- Compliance core (Phase 1) --------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'viewer',   -- admin | operator | viewer
+  must_change   INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT DEFAULT (datetime('now')),
+  last_login    TEXT
+);
+CREATE TABLE IF NOT EXISTS events (
+  id            INTEGER PRIMARY KEY,
+  ts            TEXT DEFAULT (datetime('now')),
+  person_id     INTEGER REFERENCES persons(id) ON DELETE SET NULL,
+  person_name   TEXT,
+  category      TEXT,
+  camera        TEXT,
+  score         REAL,
+  snapshot      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_person ON events(person_id);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id       INTEGER PRIMARY KEY,
+  ts       TEXT DEFAULT (datetime('now')),
+  username TEXT,
+  action   TEXT NOT NULL,
+  target   TEXT,
+  detail   TEXT,
+  ip       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
 """
 
 DEFAULT_SETTINGS = {
@@ -86,7 +120,19 @@ DEFAULT_SETTINGS = {
     "auto_enroll": {"enabled": True, "min_score": 0.6, "min_size": 60},
     # iPhone camera pairing: off until enabled in Settings (shows the QR).
     "phone": {"enabled": False},
+    # Compliance: watchlist-only mode (lawful retail shape) — when enabled
+    # the live feed NEVER auto-stores new faces; it only alerts on people
+    # already assigned to a list. Default off keeps personal-use behaviour.
+    "watchlist": {"enabled": False},
+    # Auto-deletion of old data. OFF by default so nothing you enrol is ever
+    # removed. When ON (for compliance deployments) it only deletes truly
+    # UNMATCHED detections — never a photo tied to a named or numbered person.
+    "retention": {"enabled": False, "events_days": 30, "unmatched_faces_days": 7},
+    # Operator acknowledgement of deployment duties (signage/DPIA/sign-off).
+    "compliance_ack": False,
 }
+
+PERSON_CATEGORIES = ("none", "watch", "staff", "vip")
 
 # Earlier builds persisted these stricter auto-capture values as user
 # settings; if they're stored untouched, drop them so the new capture-first
@@ -115,6 +161,7 @@ class IndexSnapshot:
     all_matrix: np.ndarray    # (M, 128) every embedding, incl. unlabeled
     all_face_ids: np.ndarray
     all_person_ids: np.ndarray  # -1 for unlabeled
+    categories: dict = None   # person_id -> category ('watch'/'staff'/'vip'/'none')
 
 
 _EMPTY = np.empty((0, 128), dtype=np.float32)
@@ -130,6 +177,7 @@ class EmbeddingIndex:
     def rebuild(self):
         rows = self._db.all_embeddings()
         names = self._db.person_names()
+        categories = self._db.person_categories()
         if rows:
             all_matrix = np.stack([r[2] for r in rows])
             all_face_ids = np.array([r[0] for r in rows], dtype=np.int64)
@@ -141,7 +189,7 @@ class EmbeddingIndex:
         labeled = all_person_ids >= 0
         self.snapshot = IndexSnapshot(
             all_matrix[labeled], all_face_ids[labeled], all_person_ids[labeled],
-            names, all_matrix, all_face_ids, all_person_ids,
+            names, all_matrix, all_face_ids, all_person_ids, categories,
         )
 
     def match(self, emb: np.ndarray, threshold: float):
@@ -190,7 +238,18 @@ class FaceDB:
             self._conn.commit()
         self._migrate_settings()
         self._migrate_numbering()
+        self._migrate_columns()
         self.index = EmbeddingIndex(self)
+
+    def _migrate_columns(self):
+        """Add columns introduced after the first release to existing DBs."""
+        with self._lock:
+            cols = {r["name"] for r in
+                    self._conn.execute("PRAGMA table_info(persons)").fetchall()}
+            if "category" not in cols:
+                self._conn.execute(
+                    "ALTER TABLE persons ADD COLUMN category TEXT DEFAULT 'none'")
+                self._conn.commit()
 
     def _migrate_settings(self):
         with self._lock:
@@ -458,21 +517,44 @@ class FaceDB:
             rows = self._conn.execute("SELECT id, name FROM persons").fetchall()
         return {r["id"]: r["name"] for r in rows}
 
-    def list_persons(self, q: str = "") -> list[dict]:
+    def person_categories(self) -> dict:
+        with self._lock:
+            rows = self._conn.execute("SELECT id, category FROM persons").fetchall()
+        return {r["id"]: (r["category"] or "none") for r in rows}
+
+    def list_persons(self, q: str = "", category: str | None = None) -> list[dict]:
         sql = (
-            "SELECT p.id, p.name, "
+            "SELECT p.id, p.name, p.category, "
             "COALESCE(p.cover_face_id, MIN(f.id)) AS cover_face_id, "
             "COUNT(f.id) AS face_count, COUNT(DISTINCT f.photo_id) AS photo_count "
             "FROM persons p LEFT JOIN faces f ON f.person_id=p.id "
         )
-        args: tuple = ()
+        where, args = [], []
         if q:
-            sql += "WHERE p.name LIKE ? "
-            args = (f"%{q}%",)
+            where.append("p.name LIKE ?"); args.append(f"%{q}%")
+        if category:
+            where.append("p.category = ?"); args.append(category)
+        if where:
+            sql += "WHERE " + " AND ".join(where) + " "
         sql += "GROUP BY p.id ORDER BY p.name"
         with self._lock:
-            rows = self._conn.execute(sql, args).fetchall()
+            rows = self._conn.execute(sql, tuple(args)).fetchall()
         return [dict(r) for r in rows]
+
+    def set_category(self, person_id: int, category: str) -> bool:
+        if category not in PERSON_CATEGORIES:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE persons SET category=? WHERE id=?", (category, person_id))
+            self._conn.commit()
+        return bool(cur.rowcount)
+
+    def watchlisted_person_ids(self) -> set:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM persons WHERE category != 'none'").fetchall()
+        return {r["id"] for r in rows}
 
     def get_person(self, person_id: int) -> dict | None:
         with self._lock:
@@ -550,6 +632,178 @@ class FaceDB:
                 f.unlink(missing_ok=True)
         self.index.rebuild()
         return counts
+
+    # ------------------------------- users --------------------------------
+
+    def user_count(self) -> int:
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def create_user(self, username: str, password_hash: str, role: str,
+                    must_change: bool = False) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO users (username, password_hash, role, must_change) "
+                "VALUES (?,?,?,?)",
+                (username.strip(), password_hash, role, int(must_change)))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def get_user(self, username: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE username=?", (username.strip(),)).fetchone()
+        return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, username, role, must_change, created_at, last_login "
+                "FROM users ORDER BY username").fetchall()
+        return [dict(r) for r in rows]
+
+    def touch_login(self, user_id: int):
+        with self._lock:
+            self._conn.execute(
+                "UPDATE users SET last_login=datetime('now') WHERE id=?", (user_id,))
+            self._conn.commit()
+
+    def set_password(self, user_id: int, password_hash: str):
+        with self._lock:
+            self._conn.execute(
+                "UPDATE users SET password_hash=?, must_change=0 WHERE id=?",
+                (password_hash, user_id))
+            self._conn.commit()
+
+    def set_user_role(self, user_id: int, role: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET role=? WHERE id=?", (role, user_id))
+            self._conn.commit()
+        return bool(cur.rowcount)
+
+    def delete_user(self, user_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            self._conn.commit()
+        return bool(cur.rowcount)
+
+    # ------------------------------- audit --------------------------------
+
+    def add_audit(self, username: str | None, action: str,
+                  target: str = "", detail: str = "", ip: str = ""):
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO audit_log (username, action, target, detail, ip) "
+                "VALUES (?,?,?,?,?)", (username, action, target, detail, ip))
+            self._conn.commit()
+
+    def query_audit(self, limit: int = 200, action: str = "") -> list[dict]:
+        sql = "SELECT * FROM audit_log "
+        args: list = []
+        if action:
+            sql += "WHERE action = ? "; args.append(action)
+        sql += "ORDER BY id DESC LIMIT ?"; args.append(min(max(limit, 1), 2000))
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(args)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ------------------------------- events -------------------------------
+
+    def add_event(self, person_id, person_name, category, camera, score, snapshot):
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO events (person_id, person_name, category, camera, score, snapshot) "
+                "VALUES (?,?,?,?,?,?)",
+                (person_id, person_name, category, camera, float(score), snapshot))
+            self._conn.commit()
+            return cur.lastrowid
+
+    def query_events(self, limit: int = 100, person_id: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM events "
+        args: list = []
+        if person_id is not None:
+            sql += "WHERE person_id = ? "; args.append(person_id)
+        sql += "ORDER BY id DESC LIMIT ?"; args.append(min(max(limit, 1), 1000))
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(args)).fetchall()
+        return [dict(r) for r in rows]
+
+    # ----------------------------- retention ------------------------------
+
+    def purge_old(self, events_days: int, faces_days: int) -> dict:
+        """Delete events older than events_days, and photos older than
+        faces_days whose faces are ALL still UNMATCHED (person_id IS NULL).
+        A photo that belongs to any person — named OR auto-numbered — is
+        never deleted, so nothing you enrol disappears. Returns counts."""
+        removed = {"events": 0, "photos": 0}
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM events WHERE ts <= datetime('now', ?)",
+                (f"-{max(int(events_days), 0)} days",))
+            removed["events"] = cur.rowcount
+            # candidate photos: the photo has at least one face, and every one
+            # of its faces is unmatched (no person at all), older than cutoff
+            photo_rows = self._conn.execute(
+                "SELECT p.id, p.filename FROM photos p WHERE p.created_at <= "
+                "datetime('now', ?) "
+                "AND EXISTS (SELECT 1 FROM faces f WHERE f.photo_id=p.id) "
+                "AND NOT EXISTS (SELECT 1 FROM faces f WHERE f.photo_id=p.id "
+                "AND f.person_id IS NOT NULL)",
+                (f"-{max(int(faces_days), 0)} days",)).fetchall()
+            targets = [(r["id"], r["filename"]) for r in photo_rows]
+            for pid, _fn in targets:
+                face_ids = [r[0] for r in self._conn.execute(
+                    "SELECT id FROM faces WHERE photo_id=?", (pid,)).fetchall()]
+                self._conn.execute("DELETE FROM photos WHERE id=?", (pid,))
+                for fid in face_ids:
+                    (CROPS_DIR / f"{fid}.jpg").unlink(missing_ok=True)
+            self._conn.commit()
+        for _pid, fn in targets:
+            (PHOTOS_DIR / fn).unlink(missing_ok=True)
+            (THUMBS_DIR / fn).unlink(missing_ok=True)
+        removed["photos"] = len(targets)
+        if targets:
+            self.index.rebuild()
+        return removed
+
+    def erase_person(self, person_id: int) -> dict:
+        """Right-to-erasure: delete the person, their labeled photos/faces,
+        their events, and scrub audit references. Returns counts."""
+        person = self.get_person(person_id)
+        if not person:
+            return {}
+        photo_ids = {f["photo_id"] for f in person["faces"]}
+        removed = {"photos": 0, "events": 0}
+        with self._lock:
+            files = []
+            for pid in photo_ids:
+                row = self._conn.execute(
+                    "SELECT filename FROM photos WHERE id=?", (pid,)).fetchone()
+                if row:
+                    files.append(row["filename"])
+                fids = [r[0] for r in self._conn.execute(
+                    "SELECT id FROM faces WHERE photo_id=?", (pid,)).fetchall()]
+                self._conn.execute("DELETE FROM photos WHERE id=?", (pid,))
+                for fid in fids:
+                    (CROPS_DIR / f"{fid}.jpg").unlink(missing_ok=True)
+            ev = self._conn.execute(
+                "DELETE FROM events WHERE person_id=?", (person_id,))
+            removed["events"] = ev.rowcount
+            self._conn.execute("DELETE FROM persons WHERE id=?", (person_id,))
+            self._conn.commit()
+        for fn in files:
+            (PHOTOS_DIR / fn).unlink(missing_ok=True)
+            (THUMBS_DIR / fn).unlink(missing_ok=True)
+        removed["photos"] = len(files)
+        self.index.rebuild()
+        return removed
 
     # ------------------------------ settings ------------------------------
 

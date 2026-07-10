@@ -1,5 +1,5 @@
 // Object segmentation (YOLO11-seg / FastSAM) — the original tool as a page.
-import { $, el, api, status } from '/static/app.js?v=2';
+import { $, el, api, status } from '/static/app.js?v=3';
 
 const send = (url) => fetch(url).catch(() => {});
 const chipColor = (i) => `hsl(${(i * 137.508) % 360} 85% 55%)`; // same wheel as the masks

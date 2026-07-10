@@ -19,12 +19,17 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import audit
+import auth
+import backup
 import face_db as fdb
 import pipeline as pl
+import retention
+import routes_admin
 import routes_faces
 import routes_phone
 from certs import ensure_certs
@@ -46,21 +51,40 @@ async def guard_and_cache(request, call_next):
     2. Cache headers: the UI must always revalidate (the old app's files got
        heuristically cached); stored photos are immutable so they may cache.
     """
+    from fastapi.responses import JSONResponse
     origin = request.headers.get("origin")
     if origin:
         from urllib.parse import urlsplit
         if urlsplit(origin).netloc != request.headers.get("host", ""):
-            from fastapi.responses import JSONResponse
             return JSONResponse({"detail": "cross-origin requests are not allowed"},
                                 status_code=403)
 
-    resp = await call_next(request)
+    # Auth gate: everything needs a session except the login flow, the PWA
+    # shell/static assets, and the phone pairing endpoints (their own toggle
+    # gates them). Media (stored faces) is protected — it is personal data.
     path = request.url.path
+    if not _is_public(path) and auth.current_user(request) is None:
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+
+    resp = await call_next(request)
     if path == "/" or path.startswith("/static"):
         resp.headers["Cache-Control"] = "no-cache"
     elif path.startswith("/media"):
         resp.headers.setdefault("Cache-Control", "max-age=86400")
     return resp
+
+
+# Paths reachable without logging in.
+_PUBLIC_EXACT = {"/", "/manifest.json", "/sw.js", "/api/login", "/api/me",
+                 "/pair", "/ca.crt", "/api/pair/qr.png", "/api/pair/info"}
+
+
+def _is_public(path: str) -> bool:
+    if path in _PUBLIC_EXACT or path.startswith("/static"):
+        return True
+    # the SPA shell and phone app load static JS then authenticate via /api;
+    # docs stay open for developer convenience on localhost
+    return path.startswith(("/docs", "/openapi", "/redoc"))
 
 
 # ----------------------------- static + pages -----------------------------
@@ -86,6 +110,65 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 app.mount("/media", StaticFiles(directory=fdb.MEDIA_DIR), name="media")
 app.include_router(routes_faces.router)
 app.include_router(routes_phone.router)
+app.include_router(routes_admin.router)
+
+
+# -------------------------------- auth ------------------------------------
+
+@app.post("/api/login")
+async def login(request: Request):
+    from fastapi.responses import JSONResponse
+    body = await request.json()
+    db = routes_faces.runtime.get("db")
+    if db is None:
+        raise HTTPException(503, "database not ready")
+    user = db.get_user(str(body.get("username", "")))
+    if not user or not auth.verify_password(str(body.get("password", "")),
+                                            user["password_hash"]):
+        audit.log(request, "login_failed", str(body.get("username", "")))
+        raise HTTPException(401, "invalid username or password")
+    db.touch_login(user["id"])
+    db.add_audit(user["username"], "login", "", "", audit.client_ip(request))
+    resp = JSONResponse({"username": user["username"], "role": user["role"],
+                         "must_change": bool(user["must_change"])})
+    resp.set_cookie(auth.COOKIE, auth.create_session(user["id"]),
+                    max_age=auth.SESSION_TTL, httponly=True, samesite="lax")
+    return resp
+
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    from fastapi.responses import JSONResponse
+    audit.log(request, "logout")
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    """Who am I? Drives the frontend login gate. Never 401s."""
+    user = auth.current_user(request)
+    if user is None:
+        return {"authenticated": False}
+    return {"authenticated": True, "username": user["username"],
+            "role": user["role"], "must_change": bool(user["must_change"])}
+
+
+@app.post("/api/password")
+async def change_password(request: Request):
+    user = auth.require(request, "viewer")  # any logged-in user, own password
+    body = await request.json()
+    db = routes_faces.runtime["db"]
+    full = db.get_user_by_id(user["id"])
+    if not auth.verify_password(str(body.get("current", "")), full["password_hash"]):
+        raise HTTPException(400, "current password is wrong")
+    new = str(body.get("new", ""))
+    if len(new) < 8:
+        raise HTTPException(400, "new password must be at least 8 characters")
+    db.set_password(user["id"], auth.hash_password(new))
+    audit.log(request, "password_changed", user["username"])
+    return {"ok": True}
 
 
 # ------------------------------- streaming --------------------------------
@@ -186,9 +269,12 @@ async def set_classes(ids: str = ""):
 def init_face_stack():
     """Open the DB now; fetch/load the face models in the background so a
     first-run download (or a broken network) never blocks server startup."""
+    backup.startup_backup()     # snapshot last session's data BEFORE we touch it
     db = fdb.FaceDB()
     routes_faces.runtime["db"] = db
     pl.face_runtime["db"] = db  # auto-capture writes through this
+    auth.bootstrap_admin(db)    # first-run admin (prints a one-time password)
+    retention.start(db)         # data-retention purge (off unless enabled)
     routes_faces.apply_settings(db.get_settings())
 
     def load():

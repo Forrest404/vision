@@ -1,5 +1,5 @@
 // Identify: upload one photo; known faces get named, nothing is stored.
-import { $, el, api, toast, photoWithFaces, handoff, trackUrl } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, handoff, trackUrl } from '/static/app.js?v=3';
 
 let lastFile = null;
 

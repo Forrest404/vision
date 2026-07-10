@@ -12,9 +12,11 @@ server.py injects the shared objects at startup:
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+import audit
+import auth
 import face_db as fdb
 import pipeline as pl
 
@@ -76,9 +78,11 @@ def _face_json(face: dict) -> dict:
 # ------------------------------- uploads ----------------------------------
 
 @router.post("/photos")
-def upload_photos(files: list[UploadFile] = File(...)):
+def upload_photos(request: Request, files: list[UploadFile] = File(...)):
     """Batch enroll: store photos, detect + embed faces, suggest matches."""
+    auth.require(request, "operator")
     db, engine = _db(), _engine()
+    audit.log(request, "upload_photos", detail=f"{len(files)} file(s)")
     if len(files) > MAX_FILES:
         raise HTTPException(413, f"max {MAX_FILES} files per request")
 
@@ -182,9 +186,11 @@ class LabelBody(BaseModel):
 
 
 @router.post("/faces/label")
-def label_faces(body: LabelBody):
+def label_faces(request: Request, body: LabelBody):
     """Batch face naming; one index rebuild at the end."""
+    auth.require(request, "operator")
     db = _db()
+    audit.log(request, "label_faces", detail=f"{len(body.labels)} face(s)")
     updated = []
     for item in body.labels:
         face = db.label_face(item.face_id, person_id=item.person_id,
@@ -196,7 +202,9 @@ def label_faces(body: LabelBody):
 
 
 @router.delete("/faces/{face_id}")
-def delete_face(face_id: int):
+def delete_face(request: Request, face_id: int):
+    auth.require(request, "operator")
+    audit.log(request, "delete_face", str(face_id))
     if not _db().delete_face(face_id):
         raise HTTPException(404, "face not found")
     return {"ok": True}
@@ -212,12 +220,17 @@ class MergeBody(BaseModel):
     target_id: int
 
 
+class CategoryBody(BaseModel):
+    category: str
+
+
 @router.get("/persons")
-def list_persons(q: str = ""):
-    persons = _db().list_persons(q)
+def list_persons(q: str = "", category: str | None = None):
+    persons = _db().list_persons(q, category)
     return [
         {
             "id": p["id"], "name": p["name"],
+            "category": p.get("category", "none"),
             "face_count": p["face_count"], "photo_count": p["photo_count"],
             "cover_url": (f"/media/crops/{p['cover_face_id']}.jpg"
                           if p["cover_face_id"] else None),
@@ -236,6 +249,7 @@ def get_person(person_id: int):
     return {
         "id": person["id"],
         "name": person["name"],
+        "category": person.get("category", "none"),
         "faces": [
             {
                 "face_id": f["id"], "photo_id": f["photo_id"],
@@ -253,25 +267,41 @@ def get_person(person_id: int):
 
 
 @router.patch("/persons/{person_id}")
-def rename_person(person_id: int, body: RenameBody):
+def rename_person(request: Request, person_id: int, body: RenameBody):
+    auth.require(request, "operator")
     if not body.name.strip():
         raise HTTPException(400, "name required")
     if not _db().rename_person(person_id, body.name):
         raise HTTPException(404, "person not found")
+    audit.log(request, "rename_person", str(person_id), body.name.strip())
     return {"ok": True, "id": person_id, "name": body.name.strip()}
 
 
+@router.post("/persons/{person_id}/category")
+def set_category(request: Request, person_id: int, body: CategoryBody):
+    """Assign a person to a watchlist category (watch/staff/vip/none)."""
+    auth.require(request, "operator")
+    if not _db().set_category(person_id, body.category):
+        raise HTTPException(400, "invalid category or person not found")
+    audit.log(request, "set_category", str(person_id), body.category)
+    return {"ok": True, "id": person_id, "category": body.category}
+
+
 @router.post("/persons/{person_id}/merge")
-def merge_person(person_id: int, body: MergeBody):
+def merge_person(request: Request, person_id: int, body: MergeBody):
+    auth.require(request, "operator")
     if not _db().merge_person(person_id, body.target_id):
         raise HTTPException(400, "merge failed (person missing or same id)")
+    audit.log(request, "merge_person", str(person_id), f"into {body.target_id}")
     return {"ok": True, "target_id": body.target_id}
 
 
 @router.delete("/persons/{person_id}")
-def delete_person(person_id: int):
+def delete_person(request: Request, person_id: int):
+    auth.require(request, "operator")
     if not _db().delete_person(person_id):
         raise HTTPException(404, "person not found")
+    audit.log(request, "delete_person", str(person_id))
     return {"ok": True}
 
 
@@ -303,9 +333,11 @@ def get_photo(photo_id: int):
 
 
 @router.delete("/photos/{photo_id}")
-def delete_photo(photo_id: int):
+def delete_photo(request: Request, photo_id: int):
+    auth.require(request, "operator")
     if not _db().delete_photo(photo_id):
         raise HTTPException(404, "photo not found")
+    audit.log(request, "delete_photo", str(photo_id))
     return {"ok": True}
 
 
@@ -376,8 +408,10 @@ def search_face(file: UploadFile = File(...), face_index: int | None = Form(None
 # -------------------------------- settings --------------------------------
 
 @router.delete("/library")
-def clear_library():
+def clear_library(request: Request):
     """Delete every person, photo and face from the on-device database."""
+    auth.require(request, "admin")
+    audit.log(request, "clear_library")
     return {"ok": True, "deleted": _db().clear_all()}
 
 
@@ -387,8 +421,10 @@ def library_stats():
 
 
 @router.get("/library/export")
-def export_library():
+def export_library(request: Request):
     """Download the whole library (database + photos) as one zip backup."""
+    auth.require(request, "admin")
+    audit.log(request, "export_library")
     import tempfile
     import zipfile
     from starlette.background import BackgroundTask
@@ -422,10 +458,12 @@ def get_settings():
 
 
 @router.post("/settings")
-def set_settings(partial: dict):
+def set_settings(request: Request, partial: dict):
     """Merge, persist, and push into the live pipeline immediately."""
+    auth.require(request, "admin")
     merged = _db().set_settings(partial)
     apply_settings(merged)
+    audit.log(request, "settings_change", detail=",".join(partial.keys()))
     return merged
 
 
@@ -436,6 +474,7 @@ def apply_settings(settings: dict):
             "rec_threshold": settings["rec_threshold"],
             "overlay": dict(settings["overlay"]),
             "auto_enroll": dict(settings.get("auto_enroll") or {}),
+            "watchlist": dict(settings.get("watchlist") or {}),
         }
         pl.state["phone_enabled"] = bool((settings.get("phone") or {}).get("enabled"))
         cam = settings.get("camera") or {}

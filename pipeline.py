@@ -233,10 +233,11 @@ class FaceTracker:
     ENROLL_MIN_AGE = 4
     ENROLL_CONSISTENCY = 0.5  # cosine between the two confirmation samples
 
-    def __init__(self, engine=None):
+    def __init__(self, engine=None, camera="mac"):
         # engine override lets phone streams use the upload engine so they
         # never contend with the Mac-camera pipeline's private engine
         self._engine = engine
+        self._camera = camera  # labels events with their source camera
         self._tracks: list[dict] = []
         self._next_id = 1
 
@@ -256,6 +257,9 @@ class FaceTracker:
         index = face_runtime["index"]
         threshold = float(face_cfg.get("rec_threshold", 0.363))
         auto = face_cfg.get("auto_enroll") or {}
+        # Watchlist mode: recognise-only, never store new faces (lawful retail).
+        if (face_cfg.get("watchlist") or {}).get("enabled"):
+            auto = {"enabled": False}
 
         # Greedy IoU association: best-overlap pairs first.
         pairs = []
@@ -307,6 +311,7 @@ class FaceTracker:
             self._tracks.append(track)
 
         # visible tracks = seen this frame
+        cats = getattr(index.snapshot, "categories", None) or {}
         out = []
         for track in self._tracks:
             if track["misses"] == 0:
@@ -316,8 +321,35 @@ class FaceTracker:
                     counts = Counter((v[0], v[1]) for v in votes)
                     (pid, name), _n = counts.most_common(1)[0]
                     score = max(v[2] for v in votes if (v[0], v[1]) == (pid, name))
-                out.append({**track, "person_id": pid, "name": name, "score": score})
+                category = cats.get(pid, "none") if pid is not None else "none"
+                if category != "none" and not track.get("event_logged"):
+                    self._log_event(track, pid, name, category, score, frame)
+                    track["event_logged"] = True
+                out.append({**track, "person_id": pid, "name": name,
+                            "score": score, "category": category})
         return out
+
+    def _log_event(self, track, pid, name, category, score, frame):
+        """Record one watchlist sighting per track, with a snapshot crop."""
+        db = face_runtime["db"]
+        if db is None:
+            return
+        snap = ""
+        try:
+            x, y, w, h = (int(v) for v in track["bbox"])
+            fh, fw = frame.shape[:2]
+            crop = frame[max(0, y):min(fh, y + h), max(0, x):min(fw, x + w)]
+            if crop.size:
+                import face_db as _fdb
+                eid = db.add_event(pid, name, category, self._camera, score, "")
+                fn = f"event_{eid}.jpg"
+                cv2.imwrite(str(_fdb.CROPS_DIR / fn), crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                snap = f"/media/crops/{fn}"
+                with db._lock:
+                    db._conn.execute("UPDATE events SET snapshot=? WHERE id=?", (snap, eid))
+                    db._conn.commit()
+        except Exception:
+            pass
 
     def _embed_and_vote(self, track: dict, frame: np.ndarray, engine, index,
                         threshold: float, auto: dict):
@@ -423,6 +455,12 @@ class FaceTracker:
 
 
 WEB_COLOR = hex_to_bgr("#f59e0b")  # amber — visually distinct from known/unknown
+# watchlist category -> box colour (alert reds for 'watch', accents otherwise)
+CATEGORY_COLORS = {
+    "watch": hex_to_bgr("#ef4444"),   # red alert
+    "staff": hex_to_bgr("#34d399"),   # green
+    "vip": hex_to_bgr("#a78bfa"),     # purple
+}
 
 
 def draw_faces(frame: np.ndarray, tracks: list[dict], face_cfg: dict) -> int:
@@ -439,9 +477,13 @@ def draw_faces(frame: np.ndarray, tracks: list[dict], face_cfg: dict) -> int:
         known = track["name"] is not None
         web_name = track.get("web_name")
 
+        category = track.get("category", "none")
         if known:
-            color = known_color
-            label = f"{track['name']} {track['score']:.2f}" if show_score else track["name"]
+            color = CATEGORY_COLORS.get(category, known_color)
+            tag = f"[{category.upper()}] " if category != "none" else ""
+            label = f"{tag}{track['name']}"
+            if show_score:
+                label += f" {track['score']:.2f}"
         elif web_name:
             color = WEB_COLOR
             label = f"? {web_name}"

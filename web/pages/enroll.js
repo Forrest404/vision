@@ -1,6 +1,6 @@
 // Enroll: batch-upload photos, click each detected face, name it.
 // Names save to the database IMMEDIATELY on OK — nothing is staged.
-import { $, el, api, toast, photoWithFaces, confirmModal, handoff } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, confirmModal, handoff } from '/static/app.js?v=3';
 
 let personCache = [];
 

@@ -1,6 +1,6 @@
 // People: browse/search the face database; person detail with rename,
 // merge, delete, face strip and photo gallery.
-import { $, el, api, toast, modal, confirmModal, lightbox, handoff } from '/static/app.js?v=2';
+import { $, el, api, toast, modal, confirmModal, lightbox, handoff } from '/static/app.js?v=3';
 
 export async function mount(root, params) {
   if (params[0]) return personDetail(root, +params[0]);
@@ -62,6 +62,9 @@ async function peopleList(root) {
             : el('div', { class: 'avatar placeholder', role: 'img', 'aria-label': p.name },
                 p.name[0]?.toUpperCase() || '?'),
           el('div', { class: 'pname' }, p.name),
+          (p.category && p.category !== 'none')
+            ? el('span', { class: `cat-tag cat-${p.category}` }, p.category)
+            : null,
           el('div', { class: 'pmeta' }, /^\d+$/.test(p.name)
             ? 'auto-captured · open to rename'
             : `${p.face_count} faces · ${p.photo_count} photos`)));
@@ -107,6 +110,12 @@ async function personDetail(root, personId) {
       }, 'Delete person')),
     el('div', { class: 'page-body', style: 'display:flex;flex-direction:column;gap:20px' },
       el('div', { class: 'card' },
+        el('h2', {}, 'Watchlist category'),
+        categoryChips(person),
+        el('p', { class: 'muted', style: 'margin:8px 0 0;font-size:.78rem' },
+          'In watchlist mode the live feed only alerts on people who are on a list. '
+          + 'Watch = alert (red), Staff/VIP = recognise, None = normal.')),
+      el('div', { class: 'card' },
         el('h2', {}, 'Faces ', el('span', { class: 'hint' }, 'hover to remove a wrong label')),
         el('div', { class: 'crop-strip' },
           person.faces.map((f) => el('div', { class: 'crop-item' },
@@ -127,6 +136,26 @@ async function personDetail(root, personId) {
         el('h2', { style: 'font-size:.76rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim);margin:0 0 10px' }, 'Photos'),
         el('div', { class: 'gallery' },
           person.photos.map((photo) => photoTile(photo, person, () => remount(root, personId)))))));
+}
+
+function categoryChips(person) {
+  const cats = [['none', 'None'], ['watch', 'Watch'], ['staff', 'Staff'], ['vip', 'VIP']];
+  const wrap = el('div', { class: 'cat-chips' });
+  const paint = () => wrap.querySelectorAll('.cat-chip').forEach((c) =>
+    c.classList.toggle('active', c.dataset.cat === (person.category || 'none')));
+  for (const [val, label] of cats) {
+    const chip = el('button', { class: `cat-chip cat-${val}`, 'data-cat': val,
+      onclick: async () => {
+        try {
+          await api.post(`/api/persons/${person.id}/category`, { category: val });
+          person.category = val; paint();
+          toast(`Set to ${label}`, 'ok');
+        } catch (err) { toast(err.message, 'err'); }
+      } }, label);
+    wrap.append(chip);
+  }
+  paint();
+  return wrap;
 }
 
 function remount(root, personId) {

@@ -1,6 +1,6 @@
 // Search: upload a face photo -> every stored photo containing that person,
 // with the matching face highlighted and a link to the full photo.
-import { $, el, api, toast, photoWithFaces, lightbox, handoff, trackUrl } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, lightbox, handoff, trackUrl } from '/static/app.js?v=3';
 
 let queryFile = null;
 

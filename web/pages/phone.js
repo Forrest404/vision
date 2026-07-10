@@ -1,7 +1,7 @@
 // Phone camera app: fullscreen viewfinder streaming frames to the Mac for
 // live recognition (+ auto-capture), and a shutter for Identify / Add
 // to library. Installed to the iPhone home screen as a PWA.
-import { $, el, api, toast, photoWithFaces, trackUrl } from '/static/app.js?v=2';
+import { $, el, api, toast, photoWithFaces, trackUrl } from '/static/app.js?v=3';
 
 const SEND_WIDTH = 640;    // streamed analysis frames (kept small for speed)
 const JPEG_QUALITY = 0.7;
